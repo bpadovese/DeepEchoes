@@ -18,6 +18,7 @@ class SSGANS(BaseGAN):
         total_loss = real_loss + fake_loss
         return total_loss
 
+    @tf.function
     def train_step(self, images, noise_dim):
         noise = tf.random.normal([len(images), noise_dim])
 

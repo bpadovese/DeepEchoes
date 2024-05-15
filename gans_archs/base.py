@@ -97,14 +97,15 @@ class BaseGAN:
     def train_step(self, input):
         raise NotImplementedError
 
-    def train_loop(self, batch_generator, epochs, checkpoint_freq=5, gen_seed=None):
+    def train_loop(self, batch_generator, epochs, checkpoint_freq=5, noise_vector=None):
         generator_losses = []
         discriminator_losses = []
         discriminator_accuracies = []
         
         noise_dim = 100
         num_examples_to_generate = 16
-        
+        noise = noise_vector
+
         for epoch in range(epochs):
             start = time.time()
             self._gen_loss.reset_states()
@@ -127,11 +128,11 @@ class BaseGAN:
             discriminator_losses.append(avg_disc_loss)
             discriminator_accuracies.append(avg_disc_accuracy)
 
-            if gen_seed is None:
-                gen_seed = tf.random.normal([num_examples_to_generate, noise_dim]) 
-
+            if noise_vector is None:
+                noise = tf.random.normal([num_examples_to_generate, noise_dim]) 
+                
             # Produce images for the GIF as you go
-            self.generate_and_plot_images(self.generator, epoch + 1, gen_seed)
+            self.generate_and_plot_images(self.generator, epoch + 1, noise)
             
             if (epoch + 1) % checkpoint_freq == 0:
                 self.ckpt_manager.save(checkpoint_number=epoch + 1)
@@ -139,7 +140,7 @@ class BaseGAN:
             print(f'Time for epoch {epoch + 1} is {time.time() - start} sec')
 
         # Generate after the final epoch
-        self.generate_and_plot_images(self.generator, epochs, gen_seed)
+        self.generate_and_plot_images(self.generator, epochs, noise)
         
         if self.log_dir is not None:
             fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))

@@ -32,6 +32,7 @@ class WGAN(BaseGAN):
 
         return gp
     
+    @tf.function
     def train_step(self, images, noise_dim):
         noise = tf.random.normal([len(images), noise_dim])
 
