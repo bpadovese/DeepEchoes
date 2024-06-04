@@ -1,13 +1,11 @@
 from scipy.signal import butter, sosfilt
 import librosa
 from tqdm import tqdm
-import skimage
 import numpy as np
 import os
 import tables as tb
 import soundfile as sf
 import pandas as pd
-from utils.image_transforms import normalize_to_range
 from pathlib import Path
 from matplotlib import pyplot as plt
 from ketos.data_handling import selection_table as sl
@@ -15,6 +13,7 @@ from ketos.data_handling.parsing import load_audio_representation
 from constants import IMG_HEIGHT, IMG_WIDTH
 # from utils.audio_representation import Mel
 from utils.hdf5_helper import SpectrogramTable, insert_spectrogram_data, create_or_get_table, file_duration_table
+from utils.spec_preprocessing import invertible_representation
 
 def load_data(path, start=None, end=None, new_sr=None):
     # Open the file to get the sample rate and total frames
@@ -151,15 +150,8 @@ def create_db(data_dir, audio_representation, annotations=None, annotation_step=
                 
                 y, sr = load_data(path=Path(data_dir) / filename, start=start, end=start+config['duration'], new_sr=config['rate'])
                 
-                # Converting windows size and step size to nfft and hop length (in frames) because librosa uses that.
-                n_fft = int(config["window"] * sr)  # Window size
-                hop_length = int(config['step'] * sr)  # Step size
-                S = librosa.feature.melspectrogram(y=y, sr=sr, n_fft=n_fft, hop_length=hop_length, n_mels=config['num_filters'], fmin=400, fmax=12000)
-                spec = librosa.power_to_db(S, ref=np.max)
+                representation_data = invertible_representation(y, config["window"], config["step"], sr, config["num_filters"], fmin=0, fmax=8000)
                 
-                representation_data = skimage.transform.resize(spec, (IMG_HEIGHT,IMG_WIDTH))
-                representation_data = normalize_to_range(representation_data)
-
                 insert_spectrogram_data(table, filename, start, label, representation_data)
     
 def main():

@@ -8,14 +8,32 @@ from utils.hdf5_helper import insert_spectrogram_data, create_or_get_table, Spec
 
 
 def load_generator(model_path):
-    """ Load the generator model from a saved file """
+    """
+    Load the generator model from a saved file.
+
+    Parameters:
+        model_path (str): The path to the saved generator model.
+
+    Returns:
+        tf.keras.Model: The loaded generator model.
+    """
     generator = tf.keras.models.load_model(model_path)
     print(f"Generator model loaded from {model_path}.")
     return generator
 
 
 def generate_new_specs(generator, noise_dim=100, batch_size=100):
-    """ Generate new spectrograms using the generator """
+    """
+    Generate new spectrograms using the generator model.
+
+    Parameters:
+        generator (tf.keras.Model): The pre-trained generator model.
+        noise_dim (int): The dimensionality of the noise vector input to the generator. Default is 100.
+        batch_size (int): The number of spectrograms to generate. Default is 100.
+
+    Returns:
+        list: A list of generated spectrograms in numpy array format.
+    """
     # Assume generator expects a random noise vector as input
     noise_dim = 100  
     random_noise = tf.random.normal([batch_size, noise_dim])
@@ -24,6 +42,14 @@ def generate_new_specs(generator, noise_dim=100, batch_size=100):
     return [unnormalize_data(generated_images[i, :, :, 0].numpy()) for i in range(batch_size)]
 
 def plot_images(input, output_folder, batch_num):
+    """
+    Plot and save generated spectrograms as images.
+
+    Parameters:
+        input (list): A list of generated spectrograms.
+        output_folder (Path): The folder to save the images.
+        batch_num (int): The current batch number, used for naming the output image file.
+    """
     fig, axs = plt.subplots(4, 4, figsize=(34, 28))
     plt.subplots_adjust(wspace=0, hspace=0)  # Adjust as needed
 
@@ -36,6 +62,15 @@ def plot_images(input, output_folder, batch_num):
     plt.close(fig)
 
 def gans_generate_to_plot(model_path, num_samples=10, noise_dim=100, output_folder=None):
+    """
+    Generate and plot spectrograms using a GAN generator model, and save them as images.
+
+    Parameters:
+        model_path (str): Path to the saved generator model.
+        num_samples (int): Number of spectrograms to generate. Default is 10.
+        noise_dim (int): Dimensionality of the noise vector input to the generator. Default is 100.
+        output_folder (str or None): Folder to save the images. Default is the current directory.
+    """
     if output_folder is None:
         output_folder = Path('.').resolve()
     else:
@@ -54,6 +89,19 @@ def gans_generate_to_plot(model_path, num_samples=10, noise_dim=100, output_fold
 
 
 def gans_generate_to_hdf5(model_path, num_samples=10, noise_dim=100, output_folder=None, hdf5_db_name='gans_db.h5', table_name='/train', label=1, batch_size=100):
+    """
+    Generate spectrograms using a GAN generator model and save them to an HDF5 database.
+
+    Parameters:
+        model_path (str): Path to the saved generator model.
+        num_samples (int): Number of spectrograms to generate. Default is 10.
+        noise_dim (int): Dimensionality of the noise vector input to the generator. Default is 100.
+        output_folder (str or None): Folder to save the HDF5 database. Default is the current directory.
+        hdf5_db_name (str): Name of the HDF5 database file. Default is 'gans_db.h5'.
+        table_name (str): Name of the table within the database to store the data. Must start with a forward slash.
+        label (int): Label to assign to the generated spectrograms. Default is 1.
+        batch_size (int): Number of samples to generate per batch. Default is 100.
+    """
     if output_folder is None:
         output_folder = Path('.').resolve()
     else:

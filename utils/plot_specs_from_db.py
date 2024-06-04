@@ -1,5 +1,4 @@
 import tables
-import librosa
 import argparse
 import random
 from pathlib import Path

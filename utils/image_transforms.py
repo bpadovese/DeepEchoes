@@ -1,7 +1,8 @@
 import tensorflow as tf
+import numpy as np
 from skimage.transform import resize
 
-def normalize_to_range(matrix, new_min=-1, new_max=1):
+def scale_to_range(matrix, new_min=-1, new_max=1):
     """
     Normalize the input matrix to a specified range [new_min, new_max].
 
@@ -21,10 +22,18 @@ def normalize_to_range(matrix, new_min=-1, new_max=1):
     
     return scaled
 
-def unnormalize_data(data):
+def normalize_to_zero_mean_unit_variance(data, clip_std=False):
+    mean = np.mean(data, axis=1, keepdims=True)
+    std = np.std(data, axis=1, keepdims=True)
+    normalized_data = (data - mean) / std
+    if clip_std:
+        normalized_data /= 3
+    return normalized_data
+
+def unscale_data(data, min_val=0, max_val=1):
     data += 1
     data /= 2
-    return data
+    return data * (max_val - min_val) + min_val
 
 def rotate_images_and_labels(images):
     # Implementation of rotating image and creating associated labels for self-supervised learning
