@@ -1,5 +1,5 @@
 import tensorflow as tf
-from constants import OUTPUT_CHANNELS, INPUT_CHANNELS, IMG_HEIGHT, IMG_WIDTH
+from deepechoes.constants import OUTPUT_CHANNELS, INPUT_CHANNELS, IMG_HEIGHT, IMG_WIDTH
 
 def phase_shuffle(x, max_phase_shift):
     # x is a 4D tensor with shape (batch_size, height, width, channels)

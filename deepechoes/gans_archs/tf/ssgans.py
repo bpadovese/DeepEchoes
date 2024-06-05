@@ -1,6 +1,4 @@
 import tensorflow as tf
-import time
-from matplotlib import pyplot as plt
 from gans_archs.tf.base import BaseGAN
 from utils.image_transforms import rotate_images_and_labels
 
@@ -8,16 +6,6 @@ class SSGANS(BaseGAN):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
     
-        
-    def generator_loss(self, fake_output):
-        return -tf.reduce_mean(fake_output)
-
-    def discriminator_loss(self, real_output, fake_output):
-        real_loss = tf.reduce_mean(tf.nn.relu(1.0 - real_output))
-        fake_loss = tf.reduce_mean(tf.nn.relu(1.0 + fake_output))
-        total_loss = real_loss + fake_loss
-        return total_loss
-
     @tf.function
     def train_step(self, images, noise_dim):
         noise = tf.random.normal([len(images), noise_dim])

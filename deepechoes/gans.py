@@ -1,6 +1,4 @@
 import tensorflow as tf
-import pandas as pd
-import ketos.data_handling.selection_table as sl
 import time
 import tables
 import librosa
@@ -8,12 +6,12 @@ import numpy as np
 from pathlib import Path
 from ketos.data_handling.data_feeding import BatchGenerator
 from matplotlib import pyplot as plt
-from constants import IMG_HEIGHT, IMG_WIDTH, OUTPUT_CHANNELS
-from generators import UnetGenerator, DcgansGenerator
-from gans_archs.dcgans import DCGAN
-from gans_archs.wgan import WGAN
-from discriminators import DcgansDiscriminator
-from utils.image_transforms import unnormalize_data
+from deepechoes.constants import IMG_HEIGHT, IMG_WIDTH, OUTPUT_CHANNELS
+from deepechoes.gans_archs.tf.nn_archs.generators import UnetGenerator, DcgansGenerator
+from deepechoes.gans_archs.tf.dcgans import DCGAN
+from deepechoes.gans_archs.tf.wgan import WGAN
+from deepechoes.gans_archs.tf.ssgans import SSGANS
+from deepechoes.gans_archs.tf.nn_archs.discriminators import DcgansDiscriminator
 
 
 def transform(X,Y):
@@ -78,7 +76,6 @@ def main():
     parser.add_argument('--epochs', default=20, type=int, help='The number of epochs')
     parser.add_argument('--batch_size', default=32, type=int, help='Batch size')
     parser.add_argument('--output_folder', default=None, type=str, help='Output directory')
-    # parser.add_argument('--model_output', default=None, type=str, help='Name of the model output file')
     parser.add_argument('--checkpoints', default=None, type=int, help='Checkpoint frequency in terms of epochs.')
     # parser.add_argument('--seed', default=None, type=int, help='Seed for random number generator')
     args = parser.parse_args()

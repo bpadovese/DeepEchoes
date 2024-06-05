@@ -1,5 +1,5 @@
 import tensorflow as tf
-from constants import OUTPUT_CHANNELS, INPUT_CHANNELS, IMG_HEIGHT, IMG_WIDTH
+from deepechoes.constants import OUTPUT_CHANNELS, INPUT_CHANNELS, IMG_HEIGHT, IMG_WIDTH
 
 # Encoder
 def downsample_block(filters, kernal_size, apply_batchnorm=True):

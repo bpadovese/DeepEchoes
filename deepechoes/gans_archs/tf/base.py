@@ -90,47 +90,54 @@ class BaseGAN:
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
     def set_loss_fn(self, loss):
-        if loss == 'bce':
-            self.generator_loss = self.bce_generator_loss
-            self.discriminator_loss = self.bce_discriminator_loss
-        elif loss == 'hinge':
-            self.generator_loss = self.hinge_generator_loss
-            self.discriminator_loss = self.hinge_discriminator_loss
-        elif loss == 'wgan_gp':
-            self.generator_loss = self.wgan_gp_generator_loss
-            self.discriminator_loss = self.wgan_gp_discriminator_loss
-        else:
-            raise ValueError("Unsupported loss type")
+        match loss:
+            case 'bce':
+                self.generator_loss = self.bce_generator_loss
+                self.discriminator_loss = self.bce_discriminator_loss
+            case 'hinge':
+                self.generator_loss = self.shared_generator_loss
+                self.discriminator_loss = self.hinge_discriminator_loss
+            case 'wgan_gp':
+                self.generator_loss = self.shared_generator_loss
+                self.discriminator_loss = self.wgan_gp_discriminator_loss
+            case _:
+                raise ValueError("Unsupported loss type")
+    
+    def wgan_gp_discriminator_loss(self, real_output, fake_output, gradient_penalty, lambda_gp=10):
+        return tf.reduce_mean(fake_output) - tf.reduce_mean(real_output) + lambda_gp * gradient_penalty
 
-    @staticmethod
-    def wgan_gp_discriminator_loss(real_output, fake_output, lambda_gp=10):
-        # Use BaseGAN.lambda_gp to access the class-level attribute
-        return tf.reduce_mean(fake_output) - tf.reduce_mean(real_output) + lambda_gp * BaseGAN.gradient_penalty(real_output, fake_output)
-
-    @staticmethod
-    def gradient_penalty(real_images, fake_images):
+    
+    def gradient_penalty(self, real_images, fake_images):
         """Calculates the gradient penalty loss for WGAN GP"""
         alpha = tf.random.uniform([len(real_images), 1, 1, 1], 0., 1.)
         interpolated = real_images * alpha + fake_images * (1 - alpha)
         with tf.GradientTape() as gp_tape:
             gp_tape.watch(interpolated)
-            pred = BaseGAN.discriminator(interpolated, training=True)  # Assuming discriminator is also accessible
+            pred = self.discriminator(interpolated, training=True) 
 
         grads = gp_tape.gradient(pred, [interpolated])[0]
         norm = tf.sqrt(tf.reduce_sum(tf.square(grads), axis=[1, 2, 3]))
         gp = tf.reduce_mean((norm - 1.)**2)
         return gp
+    
+    def shared_generator_loss(fake_output):
+        return -tf.reduce_mean(fake_output)
+    
+    @staticmethod
+    def bce_generator_loss(fake_output):
+        return tf.keras.losses.binary_crossentropy(tf.ones_like(fake_output), fake_output, from_logits=True)
 
     @staticmethod
-    def wgan_gp_generator_loss(fake_output):
-        return -tf.reduce_mean(fake_output)
+    def bce_discriminator_loss(real_output, fake_output):
+        real_loss = tf.keras.losses.binary_crossentropy(tf.ones_like(real_output), real_output, from_logits=True)
+        fake_loss = tf.keras.losses.binary_crossentropy(tf.zeros_like(fake_output), fake_output, from_logits=True)
+        return real_loss + fake_loss
 
-
-    def generator_loss(self, fake_output):
-        raise NotImplementedError
-
-    def discriminator_loss(self, real_output, fake_output):
-        raise NotImplementedError
+    @staticmethod
+    def hinge_discriminator_loss(real_output, fake_output):
+        real_loss = tf.reduce_mean(tf.nn.relu(1.0 - real_output))
+        fake_loss = tf.reduce_mean(tf.nn.relu(1.0 + fake_output))
+        return real_loss + fake_loss
 
     def train_step(self, input):
         raise NotImplementedError

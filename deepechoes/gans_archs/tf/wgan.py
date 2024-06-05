@@ -1,35 +1,9 @@
 import tensorflow as tf
-import time
-from matplotlib import pyplot as plt
 from gans_archs.tf.base import BaseGAN
 
 class WGAN(BaseGAN):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        
-    def discriminator_loss(self, real_output, fake_output, gradient_penalty):
-        # Loss combines WGAN loss and gradient penalty from the WGAN-GP paper
-        return tf.reduce_mean(fake_output) - tf.reduce_mean(real_output) + self.lambda_gp * gradient_penalty
-
-    def generator_loss(self, fake_output):
-        # Mmaximize discriminator's prediction on fake outputs
-        return -tf.reduce_mean(fake_output)
-
-    def gradient_penalty(self, real_images, fake_images):
-        """Calculates the gradient penalty loss for WGAN GP"""
-        # Get the interpolated image
-        alpha = tf.random.uniform([len(real_images), 1, 1, 1], 0., 1.)
-        interpolated = real_images * alpha + fake_images * (1 - alpha)
-
-        with tf.GradientTape() as gp_tape:
-            gp_tape.watch(interpolated)
-            pred = self.discriminator(interpolated, training=True)
-
-        grads = gp_tape.gradient(pred, [interpolated])[0]
-        norm = tf.sqrt(tf.reduce_sum(tf.square(grads), axis=[1, 2, 3]))
-        gp = tf.reduce_mean((norm - 1.)**2)
-
-        return gp
     
     @tf.function
     def train_step(self, images, noise_dim):
