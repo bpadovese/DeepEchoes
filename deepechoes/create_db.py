@@ -151,7 +151,8 @@ def create_db(data_dir, audio_representation, annotations=None, annotation_step=
                 y, sr = load_data(path=Path(data_dir) / filename, start=start, end=start+config['duration'], new_sr=config['rate'])
                 
                 representation_data = invertible_representation(y, config["window"], config["step"], sr, config["num_filters"], fmin=0, fmax=8000)
-                
+                print(representation_data.shape)
+                exit()
                 insert_spectrogram_data(table, filename, start, label, representation_data)
     
 def main():

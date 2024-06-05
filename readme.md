@@ -1,4 +1,4 @@
-# AquaGen: Marine Mammal Spectrogram Synthesis
+# DeepEchoes: Marine Mammal Spectrogram Synthesis
 
 ## Overview
 This project aims to generate spectrograms of marine mammal calls using generative algorithms, such as Generative Adversarial Networks (GANs) and Variational Autoencoders (VAEs). 

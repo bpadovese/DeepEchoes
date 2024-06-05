@@ -1,22 +1,36 @@
 import tensorflow as tf
 import time
 from matplotlib import pyplot as plt
-from gans_archs.base import BaseGAN
+from gans_archs.tf.base import BaseGAN
 
-class DCGAN(BaseGAN):
+class WGAN(BaseGAN):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-    
         
+    def discriminator_loss(self, real_output, fake_output, gradient_penalty):
+        # Loss combines WGAN loss and gradient penalty from the WGAN-GP paper
+        return tf.reduce_mean(fake_output) - tf.reduce_mean(real_output) + self.lambda_gp * gradient_penalty
+
     def generator_loss(self, fake_output):
-        return self.loss_fn(tf.ones_like(fake_output), fake_output)
+        # Mmaximize discriminator's prediction on fake outputs
+        return -tf.reduce_mean(fake_output)
 
-    def discriminator_loss(self, real_output, fake_output):
-        real_loss = self.loss_fn(tf.ones_like(real_output), real_output)
-        fake_loss = self.loss_fn(tf.zeros_like(fake_output), fake_output)
-        total_loss = real_loss + fake_loss
-        return total_loss
+    def gradient_penalty(self, real_images, fake_images):
+        """Calculates the gradient penalty loss for WGAN GP"""
+        # Get the interpolated image
+        alpha = tf.random.uniform([len(real_images), 1, 1, 1], 0., 1.)
+        interpolated = real_images * alpha + fake_images * (1 - alpha)
 
+        with tf.GradientTape() as gp_tape:
+            gp_tape.watch(interpolated)
+            pred = self.discriminator(interpolated, training=True)
+
+        grads = gp_tape.gradient(pred, [interpolated])[0]
+        norm = tf.sqrt(tf.reduce_sum(tf.square(grads), axis=[1, 2, 3]))
+        gp = tf.reduce_mean((norm - 1.)**2)
+
+        return gp
+    
     @tf.function
     def train_step(self, images, noise_dim):
         noise = tf.random.normal([len(images), noise_dim])
@@ -27,8 +41,9 @@ class DCGAN(BaseGAN):
             real_output = self.discriminator(images, training=True)
             fake_output = self.discriminator(generated_images, training=True)
 
+            gp = self.gradient_penalty(images, generated_images)
             gen_loss = self.generator_loss(fake_output)
-            disc_loss = self.discriminator_loss(real_output, fake_output)
+            disc_loss = self.discriminator_loss(real_output, fake_output, gp)
 
         real_labels = tf.ones_like(real_output)
         fake_labels = tf.zeros_like(fake_output)

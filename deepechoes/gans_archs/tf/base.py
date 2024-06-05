@@ -1,17 +1,16 @@
 import librosa
 import time
 import tensorflow as tf
-from utils.image_transforms import unnormalize_data
+from utils.image_transforms import unscale_data
 from pathlib import Path
 from matplotlib import pyplot as plt
 
 class BaseGAN:
-    def __init__(self, generator, discriminator, gen_optimizer, disc_optimizer, loss_fn=None):
+    def __init__(self, generator, discriminator, gen_optimizer, disc_optimizer, loss_fn="bce"):
         self.generator = generator
         self.discriminator = discriminator
         self.gen_optimizer = gen_optimizer
         self.disc_optimizer = disc_optimizer
-        self.loss_fn = loss_fn
         self._generated_image_dir = None
         self._checkpoint_dir = None
         self._log_dir = None
@@ -24,6 +23,8 @@ class BaseGAN:
         self._disc_loss = tf.keras.metrics.Mean(name='disc_loss')
         self._gen_loss = tf.keras.metrics.Mean(name='gen_loss')
         self._disc_accuracy = tf.keras.metrics.BinaryAccuracy(name='discriminator_accuracy')
+
+        self.set_loss_fn(loss_fn)
 
     @property
     def generated_image_dir(self):
@@ -87,6 +88,43 @@ class BaseGAN:
             self._log_dir = Path(log_dir)
 
         self.log_dir.mkdir(parents=True, exist_ok=True)
+
+    def set_loss_fn(self, loss):
+        if loss == 'bce':
+            self.generator_loss = self.bce_generator_loss
+            self.discriminator_loss = self.bce_discriminator_loss
+        elif loss == 'hinge':
+            self.generator_loss = self.hinge_generator_loss
+            self.discriminator_loss = self.hinge_discriminator_loss
+        elif loss == 'wgan_gp':
+            self.generator_loss = self.wgan_gp_generator_loss
+            self.discriminator_loss = self.wgan_gp_discriminator_loss
+        else:
+            raise ValueError("Unsupported loss type")
+
+    @staticmethod
+    def wgan_gp_discriminator_loss(real_output, fake_output, lambda_gp=10):
+        # Use BaseGAN.lambda_gp to access the class-level attribute
+        return tf.reduce_mean(fake_output) - tf.reduce_mean(real_output) + lambda_gp * BaseGAN.gradient_penalty(real_output, fake_output)
+
+    @staticmethod
+    def gradient_penalty(real_images, fake_images):
+        """Calculates the gradient penalty loss for WGAN GP"""
+        alpha = tf.random.uniform([len(real_images), 1, 1, 1], 0., 1.)
+        interpolated = real_images * alpha + fake_images * (1 - alpha)
+        with tf.GradientTape() as gp_tape:
+            gp_tape.watch(interpolated)
+            pred = BaseGAN.discriminator(interpolated, training=True)  # Assuming discriminator is also accessible
+
+        grads = gp_tape.gradient(pred, [interpolated])[0]
+        norm = tf.sqrt(tf.reduce_sum(tf.square(grads), axis=[1, 2, 3]))
+        gp = tf.reduce_mean((norm - 1.)**2)
+        return gp
+
+    @staticmethod
+    def wgan_gp_generator_loss(fake_output):
+        return -tf.reduce_mean(fake_output)
+
 
     def generator_loss(self, fake_output):
         raise NotImplementedError
@@ -191,7 +229,7 @@ class BaseGAN:
         plt.subplots_adjust(wspace=0, hspace=0)  # Adjust as needed
         for i in range(predictions.shape[0]):
             ax = axs[i // 4, i % 4]
-            mel_spectrogram = unnormalize_data(predictions[i, :, :, 0].numpy())
+            mel_spectrogram = unscale_data(predictions[i, :, :, 0].numpy())
             ax.imshow(mel_spectrogram, aspect='auto', origin='lower', cmap='viridis')
             ax.axis("off")
         plt.tight_layout()
