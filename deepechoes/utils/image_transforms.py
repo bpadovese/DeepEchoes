@@ -1,4 +1,3 @@
-import tensorflow as tf
 import numpy as np
 from skimage.transform import resize
 
@@ -43,13 +42,13 @@ def rotate_images_and_labels(images):
 
     for angle in angles:
         # Rotate images
-        rotated = tf.image.rot90(images, k=angle // 90)
+        rotated = np.rot90(images, k=angle // 90, axes=(1,2))
         rotated_images.append(rotated)
         # Create labels for rotations
-        labels += [angle // 90] * tf.shape(images)[0]
+        labels += [angle // 90] * images.shape[0]
     
     # Concatenate all rotated images and labels
-    rotated_images = tf.concat(rotated_images, axis=0)
-    labels = tf.convert_to_tensor(labels, dtype=tf.int32)
+    rotated_images = np.concatenate(rotated_images, axis=0)
+    labels = np.array(labels, dtype=np.int32)
     
     return rotated_images, labels
