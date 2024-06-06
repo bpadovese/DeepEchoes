@@ -10,7 +10,7 @@ from deepechoes.constants import IMG_HEIGHT, IMG_WIDTH, OUTPUT_CHANNELS
 from deepechoes.gans_archs.tf.nn_archs.generators import UnetGenerator, DcgansGenerator
 from deepechoes.gans_archs.tf.dcgans import DCGAN
 from deepechoes.gans_archs.tf.wgan import WGAN
-from deepechoes.gans_archs.tf.ssgans import SSGANS
+from deepechoes.gans_archs.tf.ssgans import SSGAN
 from deepechoes.gans_archs.tf.nn_archs.discriminators import DcgansDiscriminator
 
 
@@ -18,7 +18,7 @@ def transform(X,Y):
     X = tf.reshape(X, (X.shape[0],X.shape[1], X.shape[2],1))
     return X, Y
 
-def gans_train(hdf5_db, train_table="/train", epochs=20, batch_size=32, output_folder=None, checkpoints=None):
+def gans_train(hdf5_db, train_table="/train", epochs=20, batch_size=32, output_folder=None, checkpoints=None, loss='bce', gan_type='dcgan'):
 
     db = tables.open_file(hdf5_db, 'r')
     table = db.get_node(train_table + '/data')
@@ -47,9 +47,16 @@ def gans_train(hdf5_db, train_table="/train", epochs=20, batch_size=32, output_f
     discriminator = DcgansDiscriminator(apply_norm=True, norm_type='batch', phase_shift=1)
     generator_optimizer = tf.keras.optimizers.Adam(0.0001, beta_1=0.5)
     discriminator_optimizer = tf.keras.optimizers.Adam(0.0001, beta_1=0.5)
-    loss_fn = tf.keras.losses.BinaryCrossentropy(from_logits=True)
     
-    gan = DCGAN(generator, discriminator, generator_optimizer, discriminator_optimizer, loss_fn=loss_fn)
+    match gan_type:
+        case 'dcgan':
+            gan = DCGAN(generator, discriminator, generator_optimizer, discriminator_optimizer, loss_fn=loss)
+        case 'wgan':
+            gan = WGAN(generator, discriminator, generator_optimizer, discriminator_optimizer, loss_fn=loss)
+        case 'ssgan':
+            gan = SSGAN(generator, discriminator, generator_optimizer, discriminator_optimizer, loss_fn=loss)
+        case _:
+            raise ValueError("Unsupported loss type")
 
     gan.log_dir = output_folder
     gan.checkpoint_dir = output_folder / 'checkpoints'  
@@ -77,6 +84,8 @@ def main():
     parser.add_argument('--batch_size', default=32, type=int, help='Batch size')
     parser.add_argument('--output_folder', default=None, type=str, help='Output directory')
     parser.add_argument('--checkpoints', default=None, type=int, help='Checkpoint frequency in terms of epochs.')
+    parser.add_argument('--loss', default='bce', type=str, choices=['bce', 'hinge', 'wgan_gp'], help='Loss function to use.')
+    parser.add_argument('--gan_type', default='dcgan', type=str, choices=['dcgan', 'wgan', 'ssgan'], help='Type of GAN to use')
     # parser.add_argument('--seed', default=None, type=int, help='Seed for random number generator')
     args = parser.parse_args()
 

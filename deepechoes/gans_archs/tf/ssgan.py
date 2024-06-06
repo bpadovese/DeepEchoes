@@ -2,7 +2,7 @@ import tensorflow as tf
 from gans_archs.tf.base import BaseGAN
 from utils.image_transforms import rotate_images_and_labels
 
-class SSGANS(BaseGAN):
+class SSGAN(BaseGAN):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
     
