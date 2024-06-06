@@ -1,6 +1,6 @@
 import tensorflow as tf
-from gans_archs.tf.base import BaseGAN
-from utils.image_transforms import rotate_images_and_labels
+from deepechoes.gans_archs.tf.base import BaseGAN
+from deepechoes.utils.image_transforms import rotate_images_and_labels
 
 class SSGAN(BaseGAN):
     def __init__(self, *args, **kwargs):

@@ -10,10 +10,9 @@ from pathlib import Path
 from matplotlib import pyplot as plt
 from ketos.data_handling import selection_table as sl
 from ketos.data_handling.parsing import load_audio_representation
-from constants import IMG_HEIGHT, IMG_WIDTH
-# from utils.audio_representation import Mel
-from utils.hdf5_helper import SpectrogramTable, insert_spectrogram_data, create_or_get_table, file_duration_table
-from utils.spec_preprocessing import invertible_representation
+from deepechoes.constants import IMG_HEIGHT, IMG_WIDTH
+from deepechoes.utils.hdf5_helper import SpectrogramTable, insert_spectrogram_data, create_or_get_table, file_duration_table
+from deepechoes.utils.spec_preprocessing import invertible_representation
 
 def load_data(path, start=None, end=None, new_sr=None):
     # Open the file to get the sample rate and total frames
@@ -151,8 +150,6 @@ def create_db(data_dir, audio_representation, annotations=None, annotation_step=
                 y, sr = load_data(path=Path(data_dir) / filename, start=start, end=start+config['duration'], new_sr=config['rate'])
                 
                 representation_data = invertible_representation(y, config["window"], config["step"], sr, config["num_filters"], fmin=0, fmax=8000)
-                print(representation_data.shape)
-                exit()
                 insert_spectrogram_data(table, filename, start, label, representation_data)
     
 def main():

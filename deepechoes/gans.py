@@ -8,9 +8,9 @@ from ketos.data_handling.data_feeding import BatchGenerator
 from matplotlib import pyplot as plt
 from deepechoes.constants import IMG_HEIGHT, IMG_WIDTH, OUTPUT_CHANNELS
 from deepechoes.gans_archs.tf.nn_archs.generators import UnetGenerator, DcgansGenerator
-from deepechoes.gans_archs.tf.dcgans import DCGAN
+from deepechoes.gans_archs.tf.dcgan import DCGAN
 from deepechoes.gans_archs.tf.wgan import WGAN
-from deepechoes.gans_archs.tf.ssgans import SSGAN
+from deepechoes.gans_archs.tf.ssgan import SSGAN
 from deepechoes.gans_archs.tf.nn_archs.discriminators import DcgansDiscriminator
 
 
@@ -79,7 +79,7 @@ def main():
     parser = argparse.ArgumentParser()
     
     parser.add_argument('hdf5_db', type=str, help='HDF5 Database file path')
-    parser.add_argument('--train_table', default='/', type=str, help="The table within the hdf5 database where the training data is stored. For example, /train")
+    parser.add_argument('--train_table', default='/train', type=str, help="The table within the hdf5 database where the training data is stored. For example, /train")
     parser.add_argument('--epochs', default=20, type=int, help='The number of epochs')
     parser.add_argument('--batch_size', default=32, type=int, help='Batch size')
     parser.add_argument('--output_folder', default=None, type=str, help='Output directory')

@@ -2,7 +2,7 @@ import tables
 import argparse
 import random
 from pathlib import Path
-from utils.image_transforms import unnormalize_data
+from deepechoes.utils.image_transforms import unscale_data
 from matplotlib import pyplot as plt
 
 
@@ -24,7 +24,7 @@ def plot_specs(hdf5_db, train_table, random_sample=True):
     plt.subplots_adjust(wspace=0, hspace=0)  # Adjust as needed
     for i, idx in enumerate(sampled_indices):
         ax = axs[i // 4, i % 4]
-        mel_spectrogram = unnormalize_data(table[idx]['data'])  
+        mel_spectrogram = unscale_data(table[idx]['data'])  
         ax.imshow(mel_spectrogram, aspect='auto', origin='lower', cmap='viridis')
         ax.axis('off')
     

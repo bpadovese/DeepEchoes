@@ -5,7 +5,6 @@ import tables as tb
 import json
 import skimage
 from pathlib import Path
-from utils.image_transforms import unnormalize_data
 
 def create_waveforms_from_hdf5(hdf5_db, audio_representation, train_table, output_folder):
     """

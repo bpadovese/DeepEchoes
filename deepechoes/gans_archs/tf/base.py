@@ -1,7 +1,6 @@
-import librosa
 import time
 import tensorflow as tf
-from utils.image_transforms import unscale_data
+from deepechoes.utils.image_transforms import unscale_data
 from pathlib import Path
 from matplotlib import pyplot as plt
 
@@ -176,7 +175,7 @@ class BaseGAN:
             if noise_vector is None:
                 noise = tf.random.normal([num_examples_to_generate, noise_dim]) 
                 
-            # Produce images for the GIF as you go
+            # Produce images
             self.generate_and_plot_images(self.generator, epoch + 1, noise)
             
             if (epoch + 1) % checkpoint_freq == 0:

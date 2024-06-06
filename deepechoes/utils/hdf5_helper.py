@@ -6,7 +6,7 @@ from ketos.data_handling.data_handling import parse_datetime
 from ketos.audio.waveform import get_duration
 from random import sample
 from ketos.data_handling.data_handling import find_files
-from constants import IMG_HEIGHT, IMG_WIDTH
+from deepechoes.constants import IMG_HEIGHT, IMG_WIDTH
 
 
 # Define the data structure for the table

@@ -21,6 +21,12 @@ def scale_to_range(matrix, new_min=-1, new_max=1):
     
     return scaled
 
+def tonal_noise_reduction(data):
+    row_medians = np.median(data, axis=1, keepdims=True)
+    col_medians = np.median(data, axis=0, keepdims=True)
+    spec_normalized = data - row_medians - col_medians
+    return spec_normalized
+
 def normalize_to_zero_mean_unit_variance(data, clip_std=False):
     mean = np.mean(data, axis=1, keepdims=True)
     std = np.std(data, axis=1, keepdims=True)

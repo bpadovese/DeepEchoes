@@ -1,5 +1,5 @@
 import tensorflow as tf
-from gans_archs.tf.base import BaseGAN
+from deepechoes.gans_archs.tf.base import BaseGAN
 
 class WGAN(BaseGAN):
     def __init__(self, *args, **kwargs):
