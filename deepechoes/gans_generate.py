@@ -3,8 +3,8 @@ import tables as tb
 from matplotlib import pyplot as plt
 from tqdm import tqdm
 from pathlib import Path
-from utils.image_transforms import unnormalize_data
-from utils.hdf5_helper import insert_spectrogram_data, create_or_get_table, SpectrogramTable
+from deepechoes.utils.image_transforms import unscale_data
+from deepechoes.utils.hdf5_helper import insert_spectrogram_data, create_or_get_table, SpectrogramTable
 
 
 def load_generator(model_path):
@@ -22,7 +22,7 @@ def load_generator(model_path):
     return generator
 
 
-def generate_new_specs(generator, noise_dim=100, batch_size=100):
+def generate_new_specs(generator, noise_dim=100, batch_size=100, transform=None):
     """
     Generate new spectrograms using the generator model.
 
@@ -39,7 +39,9 @@ def generate_new_specs(generator, noise_dim=100, batch_size=100):
     random_noise = tf.random.normal([batch_size, noise_dim])
     
     generated_images = generator(random_noise, training=False)
-    return [unnormalize_data(generated_images[i, :, :, 0].numpy()) for i in range(batch_size)]
+    if transform:
+        return [unscale_data(generated_images[i, :, :, 0].numpy()) for i in range(batch_size)]
+    return [generated_images[i, :, :, 0].numpy() for i in range(batch_size)]
 
 def plot_images(input, output_folder, batch_num):
     """
@@ -140,7 +142,7 @@ def main():
     parser.add_argument('--table_name', default='/train', type=str, help="Table name within the database where the data will be stored. Must start with a foward slash. For instance '/train'")
     parser.add_argument('--hdf5_db_name', default='gans_db.h5', type=str, help='HDF5 dabase name. For isntance: db.h5')
     parser.add_argument('--label', default=1, type=int, help='Label to assign the generated images.')
-    parser.add_argument('--batch_size', default=100, type=int, help='Number of samples to generate per batch.')
+    parser.add_argument('--batch_size', default=32, type=int, help='Number of samples to generate per batch.')
 
     args = parser.parse_args()
     mode = args.mode

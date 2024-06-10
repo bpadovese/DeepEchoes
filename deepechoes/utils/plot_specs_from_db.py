@@ -5,6 +5,23 @@ from pathlib import Path
 from deepechoes.utils.image_transforms import unscale_data
 from matplotlib import pyplot as plt
 
+def plot_single_spec(hdf5_db, train_table, index=None):
+    db = tables.open_file(hdf5_db, 'r')
+    table = db.get_node(train_table + '/data')
+
+    # If no index is provided, randomly sample one
+    if index is None:
+        index = random.randint(0, table.nrows - 1)
+
+    mel_spectrogram = unscale_data(table[index]['data'])  
+
+    plt.figure(figsize=(4, 3))
+    plt.imshow(mel_spectrogram, aspect='auto', origin='lower', cmap='viridis')
+    plt.axis('off')
+    plt.tight_layout()
+    plt.savefig("single_spectrogram.png")
+    plt.show()
+    db.close()
 
 def plot_specs(hdf5_db, train_table, random_sample=True):
     db = tables.open_file(hdf5_db, 'r')
@@ -45,9 +62,14 @@ def main():
     parser.add_argument("db", type=str, help="Path to the HDF5 database file")
     parser.add_argument("table", type=str, help="Name of the table within the HDF5 database")
     parser.add_argument("--random_sample", type=boolean_string, default=True, help="Randomly sample from the db or get the first 16")
+    parser.add_argument("--single", type=boolean_string, default=False, help="Plot a single spectrogram")
+    parser.add_argument("--index", type=int, default=None, help="Index of the spectrogram to plot (only if plotting a single one)")
     args = parser.parse_args()
     
-    plot_specs(args.db, args.table, args.random_sample)
+    if args.single:
+        plot_single_spec(args.db, args.table, args.index)
+    else:
+        plot_specs(args.db, args.table, args.random_sample)
 
 if __name__ == "__main__":
     main()

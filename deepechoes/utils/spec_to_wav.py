@@ -4,7 +4,22 @@ import librosa
 import tables as tb
 import json
 import skimage
+import soundfile as sf
 from pathlib import Path
+
+
+def spec_to_wav(spectrogram, n_fft, hop_length, sr):
+    # print(f"spectrogram: {spectrogram}")
+    # print(np.max(spectrogram))
+    # print(np.min(spectrogram))
+    S = librosa.db_to_power(spectrogram, ref=1.0)
+    # waveform = librosa.feature.inverse.mel_to_audio(S, n_fft=n_fft, hop_length=hop_length, sr=sr, fmin=0, fmax=int(sr/2))
+    # print(f"S: {S}")
+    S_inv = librosa.feature.inverse.mel_to_stft(S, sr=sr, n_fft=n_fft, fmin=0, fmax=int(sr/2))
+    # print(f"S_inv: {S_inv}")
+    waveform = librosa.griffinlim(S_inv, n_iter=32, hop_length=hop_length, window='hann')
+    # print(f"waveform: {waveform}")
+    return waveform
 
 def create_waveforms_from_hdf5(hdf5_db, audio_representation, train_table, output_folder):
     """
@@ -37,17 +52,14 @@ def create_waveforms_from_hdf5(hdf5_db, audio_representation, train_table, outpu
         
         # spectrogram = unnormalize_data(spectrogram)
         # spectrogram = skimage.transform.resize(spectrogram, (150, 241))
-
-        # Perform ISTFT
-        # waveform = librosa.feature.inverse.mel_to_audio(spectrogram, n_fft=n_fft, hop_length=hop_length, sr=sr, fmin=400, fmax=int(sr/2))
-        waveform = librosa.feature.inverse.mel_to_audio(spectrogram, sr=sr, fmin=400, fmax=int(sr/2))
-
-        # Normalize the waveform to the range [-1, 1]
-        waveform /= np.max(np.abs(waveform))
+        waveform = spec_to_wav(spectrogram, n_fft, hop_length, sr)
+        
+        # waveform = librosa.feature.inverse.mel_to_audio(spectrogram, sr=sr, fmin=0, fmax=int(sr/2))
+        # waveform /= np.max(np.abs(waveform))
 
         # Save the waveform to a file
         waveform_filename = output_path / f"waveform_{filename}.wav"
-        scipy.io.wavfile.write(waveform_filename, sr, waveform)
+        sf.write(waveform_filename, waveform, sr)
 
     db.close()
 

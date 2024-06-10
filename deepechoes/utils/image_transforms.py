@@ -1,5 +1,4 @@
 import numpy as np
-from skimage.transform import resize
 
 def scale_to_range(matrix, new_min=-1, new_max=1):
     """
