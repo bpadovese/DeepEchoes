@@ -1,5 +1,6 @@
 import tensorflow as tf
 import tables as tb
+import numpy as np
 from matplotlib import pyplot as plt
 from tqdm import tqdm
 from pathlib import Path
@@ -89,6 +90,22 @@ def gans_generate_to_plot(model_path, num_samples=10, noise_dim=100, output_fold
         generated_images = generate_new_specs(generator, noise_dim, batch_size_adjusted)
         plot_images(generated_images, output_folder, batch_num)
 
+def save_single_spectrogram_to_csv(model_path, noise_dim=100, csv_file_path='single_spectrogram.csv'):
+    """
+    Generate a single spectrogram using the GAN generator model and save it to a CSV file.
+
+    Parameters:
+        model_path (str): Path to the saved generator model.
+        noise_dim (int): The dimensionality of the noise vector input to the generator.
+        csv_file_path (str): Path to save the CSV file.
+    """
+    generator = load_generator(model_path)
+    # Generate a single spectrogram using the existing function
+    generated_spectrograms = generate_new_specs(generator, noise_dim, batch_size=1)
+    
+    # Save the generated spectrogram to a CSV file
+    np.savetxt(csv_file_path, generated_spectrograms[0], delimiter=',')
+    print(f"Saved generated spectrogram to CSV at {csv_file_path}")
 
 def gans_generate_to_hdf5(model_path, num_samples=10, noise_dim=100, output_folder=None, hdf5_db_name='gans_db.h5', table_name='/train', label=1, batch_size=100):
     """
@@ -118,7 +135,7 @@ def gans_generate_to_hdf5(model_path, num_samples=10, noise_dim=100, output_fold
     with tb.open_file(output, mode='a') as h5file:
         table = create_or_get_table(h5file, table_name, 'data', SpectrogramTable)
         num_batches = (num_samples + batch_size - 1) // batch_size  # Calculate how many batches are needed
-
+        print(f'\nGenerating {num_samples} samples with label {label} to table {table_name}...')
         for batch_num in tqdm(range(num_batches)):
             batch_size_adjusted = min(batch_size, num_samples - batch_num * batch_size) # calculate the batch size for the current batch (will be different for the last batch)
             generated_images = generate_new_specs(generator, noise_dim, batch_size_adjusted)
@@ -135,7 +152,7 @@ def main():
     parser = argparse.ArgumentParser()
     
     parser.add_argument('model_path', type=str, help='Path to where the generator is saved')
-    parser.add_argument('--mode', type=str, default='hdf5', help='mode to either save to a hdf5 db or plot')
+    parser.add_argument('--mode', type=str, default='hdf5', help='mode to either save to a hdf5 db or plot, or saves 1 image to a "csv"')
     parser.add_argument('--num_samples', default=10, type=int, help="How many samples to generate.")
     parser.add_argument('--noise_dim', default=100, type=int, help='The noise dim.')
     parser.add_argument('--output_folder', default=None, type=str, help='Output directory')
@@ -151,7 +168,9 @@ def main():
 
     if mode == 'hdf5':
         gans_generate_to_hdf5(**arg_dict)
-    else:
+    elif mode == 'csv':
+        save_single_spectrogram_to_csv(args.model_path)
+    else:    
         gans_generate_to_plot(args.model_path, args.num_samples, args.noise_dim, args.output_folder)
 
 if __name__ == "__main__":

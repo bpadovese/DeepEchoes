@@ -20,6 +20,7 @@
 
 # cache
 .pytest_cache
+*.tsv
 
 # Docker
 docker/create/ketos
