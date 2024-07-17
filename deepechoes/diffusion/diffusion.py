@@ -1,67 +1,258 @@
-import tables
 import argparse
-from noise_schedulers import NoiseScheduler
-from dataset import HDF5Dataset, line_dataset, dino_dataset
+from deepechoes.diffusion.noise_schedulers import NoiseScheduler
+from deepechoes.diffusion.dataset import line_dataset, dino_dataset, spec_dataset, Normalize
 from torch.utils.data import DataLoader
 from torch import nn
-from positional_embeddings import PositionalEmbedding
+from torchvision import transforms
 from pathlib import Path
+from tqdm.auto import tqdm
+from matplotlib import pyplot as plt
+from deepechoes.diffusion.nn_architectures.mlp import MLP
+from deepechoes.diffusion.nn_architectures.unet import huggingface_unet, UNet
+from torch.utils.data import default_collate
+from diffusers import DDPMScheduler
+import lightning as L
 import torch
 import numpy as np
+import time
 
-class Block(nn.Module):
-    def __init__(self, size: int):
-        super().__init__()
 
-        self.ff = nn.Linear(size, size)
-        self.act = nn.GELU()
+def get_model_output(model, inputs, timesteps):
+    """
+    Get the output from the model, handling cases where the model's output is a dictionary.
 
-    def forward(self, x: torch.Tensor):
-        return x + self.act(self.ff(x))
+    This function is designed to support models that may return outputs in different formats,
+    including Hugging Face models that return a dictionary with the key 'sample'.
+
+    Args:
+        model (torch.nn.Module): The model to generate the output from.
+        inputs (torch.Tensor): The input tensor to the model.
+        timesteps (torch.Tensor): The timesteps tensor used as an additional input to the model.
+
+    Returns:
+        torch.Tensor: The processed output tensor from the model. If the model's output is a
+                      dictionary containing the key 'sample', the corresponding value is returned.
+                      Otherwise, the output is returned as-is.
+    """
+    output = model(inputs, timesteps)
+    if isinstance(output, dict) and 'sample' in output:
+        return output['sample']           
+    return output
+
+def custom_collate(batch):
+    """
+    This function checks if the batch is a tuple with only one tensor. 
+    If it is, the function unpacks the tensor from the tuple and 
+    calls the default collate function to process it. If the batch 
+    contains more than one tensor or is not a tuple, the default 
+    collate function is called directly.
+
+    This function was written to handle tiny 1D datasets for testing
+    diffusion models.
+
+    In a typical supervised learning scenario, batch[0] would contain 
+    the input features, and batch[1] would contain the labels. However,
+    in this specific case, we only have one tensor representing the data
+    points (coordinates), and there are no labels. 
+
+    Args:
+        batch (list): A list of samples from the dataset, where each 
+                      sample is expected to be a tuple containing a 
+                      single tensor.
+
+    Returns:
+        Tensor: A collated batch of tensors.
+    """
+    if isinstance(batch[0], tuple) and len(batch[0]) == 1:
+        # Unpack the single-element tuples
+        batch = [item[0] for item in batch]
+        return default_collate(batch)
+    else:
+        # Use the default collate function for other cases
+        return default_collate(batch)
+
+# def train(fabric, model, optimizer, dataloader):
+#     # Training loop
+#     model.train()
+#     for epoch in range(num_epochs):
+#         for i, batch in enumerate(dataloader):
+            
+
+def reverse_diffusion(fabric, model, num_timesteps, noise_scheduler, batch_shape):
+    model.eval()
+    with torch.no_grad():
+        # Start with random noise
+        noisy = torch.randn(batch_shape, device=fabric.device)  # Use the shape from the training set
+
+        for t in tqdm(reversed(range(num_timesteps)), desc="Reverse Diffusion"):
+            t_batch = torch.tensor([t] * batch_shape[0], device=fabric.device).long()
+            # Predict the noise using the model
+            noise_pred = get_model_output(model, noisy, t_batch)
+            # Remove the predicted noise
+            noisy = noise_scheduler.step(noise_pred, t, noisy).prev_sample
+    return noisy
+
+def create_image(samples, epoch, output_folder):
+    # Save the evaluated image or any other required outputs
+    image_folder = Path(output_folder) / "images"
+    image_folder.mkdir(parents=True, exist_ok=True)
+
+    eval_image = (samples + 1) / 2  # Assuming the image was normalized to [-1, 1]
+    eval_image = eval_image.squeeze().cpu().numpy()
+
+    plt.imshow(eval_image, cmap='viridis', aspect='auto')
+    plt.axis('off')
+
+    plt.tight_layout()
+    plt.savefig(image_folder / f"epoch_{epoch}.png", bbox_inches='tight', pad_inches=0)
+    plt.close()
+
+def create_image_grid(samples, epoch, output_folder):
+    # Save the evaluated images or any other required outputs
+    image_folder = Path(output_folder) / "images"
+    image_folder.mkdir(parents=True, exist_ok=True)
+
+    if samples.ndim == 4:  # 2D images case
+        eval_images = (samples + 1) / 2  # Assuming images were normalized to [-1, 1]
+        eval_images = eval_images.squeeze().cpu().numpy()
+
+        fig, axs = plt.subplots(4, 4, figsize=(8, 8))
+        axs = axs.flatten()
+
+        for img, ax in zip(eval_images, axs):
+            ax.imshow(img, cmap='viridis', aspect='auto')
+            ax.axis('off')
+
+        plt.tight_layout()
+        plt.savefig(image_folder / f"epoch_{epoch}.png")
+        plt.close()
+
+    elif samples.ndim == 2:  # 1D points case
+        frames = samples.cpu().numpy()
+        xmin, xmax = -6, 6
+        ymin, ymax = -6, 6
+
+        # for i, frame in enumerate(frames):  # Limiting to first 16 samples for consistency
+        plt.figure(figsize=(10, 8))
+        plt.scatter(frames[:, 0], frames[:, 1])
+        plt.xlim(xmin, xmax)
+        plt.ylim(ymin, ymax)
+        plt.savefig(image_folder / f"epoch_{epoch}.png")
+        plt.close()
+
+
+def main(dataset="dino", train_table='/train', output_folder=None, train_batch_size=32, eval_batch_size=16,
+         num_epochs=200, learning_rate=1e-4, num_timesteps=50, beta_schedule="linear", embedding_size=128,
+         hidden_size=128, hidden_layers=3, time_embedding="sinusoidal", input_embedding="sinusoidal",
+         save_images_step=1):
     
-class MLP(nn.Module):
-    def __init__(self, hidden_size: int = 128, hidden_layers: int = 3, emb_size: int = 128,
-                 time_emb: str = "sinusoidal", input_emb: str = "sinusoidal"):
-        super().__init__()
+    fabric = L.Fabric(accelerator='gpu')
+    # fabric = L.Fabric(accelerator='gpu', precision="16-mixed") # Depdning on how old your GPU is, mixed precision might even slow down processing
+    if dataset == "dino":
+        dataset = dino_dataset()
+        model = MLP(
+            hidden_size=hidden_size,
+            hidden_layers=hidden_layers,
+            emb_size=embedding_size,
+            time_emb=time_embedding,
+            input_emb=input_embedding)
+        clip_sample = False # we dont want to clip the sample as the data are simply points in a cartesian plane
+    else:
+        dataset = spec_dataset(dataset, train_table)
+        normalize_transform = Normalize(dataset.min_value, dataset.max_value)
+        dataset.set_transform(normalize_transform)
+        model = huggingface_unet()
+        clip_sample = True # We want to clip the values of our generations to -1 - 1
 
-        self.time_mlp = PositionalEmbedding(emb_size, time_emb)
-        self.input_mlp1 = PositionalEmbedding(emb_size, input_emb, scale=25.0)
-        self.input_mlp2 = PositionalEmbedding(emb_size, input_emb, scale=25.0)
+    data_loader = DataLoader(
+            dataset, batch_size=train_batch_size, shuffle=True, drop_last=False, collate_fn=custom_collate
+        )
+    
+    # noise_scheduler = NoiseScheduler(
+    #     num_timesteps=num_timesteps,
+    #     beta_schedule=beta_schedule,
+    #     device=fabric.device)
+    noise_scheduler = DDPMScheduler(num_train_timesteps=num_timesteps, clip_sample=clip_sample)
 
-        concat_size = len(self.time_mlp.layer) + len(self.input_mlp1.layer) + len(self.input_mlp2.layer)
-        layers = [nn.Linear(concat_size, hidden_size), nn.GELU()]
-        for _ in range(hidden_layers):
-            layers.append(Block(hidden_size))
-        layers.append(nn.Linear(hidden_size, 2))
-        self.joint_mlp = nn.Sequential(*layers)
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=learning_rate,
+    )
 
-    def forward(self, x, t):
-        x1_emb = self.input_mlp1(x[:, 0])
-        x2_emb = self.input_mlp2(x[:, 1])
-        t_emb = self.time_mlp(t)
-        x = torch.cat((x1_emb, x2_emb, t_emb), dim=-1)
-        x = self.joint_mlp(x)
-        return x
+    model, optimizer = fabric.setup(model, optimizer)
+    data_loader = fabric.setup_dataloaders(data_loader)
 
-def main(dataset, train_table="/train", train_batch_size=32, **kwargs):
-    db = tables.open_file(dataset, mode='r')
-    table = db.get_node(train_table + '/data')
-    dataset = HDF5Dataset(table, transform=None)
-    print(dataset)
-    dataloader = DataLoader(dataset, batch_size=train_batch_size, shuffle=True)
-    # Example of iterating through the DataLoader
-    for batch in dataloader:
-        print(batch.shape)
-        exit()
-    db.close()
+    if output_folder is None:
+        output_folder = Path('.').resolve()
+    else:
+        output_folder = Path(output_folder).resolve()
+    
+    output_folder.mkdir(parents=True, exist_ok=True)
+
+    # Training loop
+    global_step = 0
+    losses = []
+    batch_shape = None
+    print("Saving images at each epoch...")
+    for epoch in range(num_epochs):
+        progress_bar = tqdm(total=len(data_loader))
+        progress_bar.set_description(f"Epoch {epoch}")
+        model.train()
+        for step, batch in enumerate(data_loader):
+
+            # start_time = time.time()  # Record the start time
+            # print(batch_idx)
+            batch_shape = batch.shape  # Get the shape of the batch
+            noise = torch.randn(batch_shape, device=fabric.device) # Creating a noise tensor (Gaussian distribution) with the same shape as the batch
+
+            # For each item in the batch, this selects a random timestep from 0 to num_timesteps - 1 when noise will be added.
+            timesteps = torch.randint(0, num_timesteps, (batch_shape[0],), device=fabric.device).long()
+
+            # Add noise to the clean images according to the noise magnitude at each timestep
+            # (this is the forward diffusion process)
+            noisy = noise_scheduler.add_noise(batch, noise, timesteps)
+            noise_pred = get_model_output(model, noisy, timesteps)
+
+            loss = torch.nn.functional.mse_loss(noise_pred, noise)
+            optimizer.zero_grad()
+            fabric.backward(loss)
+            fabric.clip_gradients(model, optimizer, clip_val=1.0)
+            # nn.utils.clip_grad_norm_(model.parameters(), 1.0) # Clipping to prevent the gradients from exploding
+
+            ### UPDATE MODEL PARAMETERS
+            optimizer.step()
+            
+            progress_bar.update(1)
+            logs = {"loss": loss.detach().item(), "step": global_step}
+            progress_bar.set_postfix(**logs)
+            losses.append(loss.detach().item())
+
+            global_step += 1
+
+            # end_time = time.time()  # Record the end time
+            # batch_processing_time = end_time - start_time  # Calculate the processing time
+            # print(batch_processing_time)
+
+        if epoch % save_images_step == 0 or epoch == num_epochs - 1:
+            image_folder = output_folder / "images"
+            image_folder.mkdir(parents=True, exist_ok=True)
+            
+            bs = (eval_batch_size, *batch_shape[1:])
+            samples = reverse_diffusion(fabric, model, num_timesteps, noise_scheduler, bs)
+            create_image(samples, epoch, output_folder)
+        
+        # print(f"Epoch {epoch} completed, loss: {loss.item()}")
+    
+    torch.save(model.state_dict(), output_folder / f"spec.pth")
+    print("Training completed.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("dataset", type=str)
+    parser.add_argument("dataset", default="dino", type=str)
     parser.add_argument('--train_table', default='/train', type=str)
     parser.add_argument("--output_folder", type=str, default=None)
     parser.add_argument("--train_batch_size", type=int, default=32)
-    parser.add_argument("--eval_batch_size", type=int, default=1000)
+    parser.add_argument("--eval_batch_size", type=int, default=16)
     parser.add_argument("--num_epochs", type=int, default=200)
     parser.add_argument("--learning_rate", type=float, default=1e-3)
     parser.add_argument("--num_timesteps", type=int, default=50)
@@ -74,85 +265,13 @@ if __name__ == "__main__":
     parser.add_argument("--save_images_step", type=int, default=1)
     args = parser.parse_args()
 
-   
+    main(dataset=args.dataset, train_table=args.train_table, output_folder=args.output_folder, train_batch_size=args.train_batch_size,
+         eval_batch_size=args.eval_batch_size, num_epochs=args.num_epochs, learning_rate=args.learning_rate,
+         num_timesteps=args.num_timesteps, beta_schedule=args.beta_schedule, embedding_size=args.embedding_size,
+         hidden_size=args.hidden_size, hidden_layers=args.hidden_layers, time_embedding=args.time_embedding,
+         input_embedding=args.input_embedding, save_images_step=args.save_images_step)
 
-    hidden_size = args.hidden_size
-    hidden_layers = args.hidden_layers
-    embedding_size = args. embedding_size
-    time_embedding = args. time_embedding
-    input_embedding = args.input_embedding
-    num_timesteps = args.num_timesteps
-    beta_schedule = args.beta_schedule
-    learning_rate = args.learning_rate
-    output_folder = args.output_folder
 
-    dataset = dino_dataset()
-    data_loader = DataLoader(
-        dataset, batch_size=args.train_batch_size, shuffle=True, drop_last=True)
     
-    model = MLP(
-        hidden_size=hidden_size,
-        hidden_layers=hidden_layers,
-        emb_size=embedding_size,
-        time_emb=time_embedding,
-        input_emb=input_embedding)
 
-    noise_scheduler = NoiseScheduler(
-        num_timesteps=num_timesteps,
-        beta_schedule=beta_schedule)
-
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=learning_rate,
-    )
-
-    if output_folder is None:
-        output_folder = Path('.').resolve()
-    else:
-        output_folder = Path(output_folder).resolve()
-    
-    output_folder.parent.mkdir(parents=True, exist_ok=True)
-
-    # Training loop
-    global_step = 0
-    losses = []
-    model.train()
-    for epoch in range(args.num_epochs):
-        for batch_idx, batch in enumerate(data_loader):
-            batch = batch[0]
-            noise = torch.randn(batch.shape) # Creating a noise tensor (Gaussian distribution) with the same shape as the batch
-            # For each item in the batch, this selects a random timestep from 0 to num_timesteps - 1 when noise will be added.
-            timesteps = torch.randint(0, noise_scheduler.num_timesteps, (batch.shape[0],)).long()
-            noisy = noise_scheduler.add_noise(batch, noise, timesteps)
-            
-            noise_pred = model(noisy, timesteps)
-            loss = torch.nn.functional.mse_loss(noise_pred, noise)
-            optimizer.zero_grad()
-            loss.backward()
-            nn.utils.clip_grad_norm_(model.parameters(), 1.0) # Clipping to prevent the gradients from exploding
-            optimizer.step()
-
-            logs = {"loss": loss.detach().item(), "step": global_step}
-            losses.append(loss.detach().item())
-
-            global_step += 1
-
-        if epoch % args.save_images_step == 0 or epoch == args.num_epochs - 1:
-            # Generate and save images or data
-            # Here you would have code that generates data/images based on the model's current state
-            # For example, use the model to generate samples and save them
-            model.eval()
-            sample = torch.randn(args.eval_batch_size, 2) # Drawing from Gaussian distribution
-            timesteps = list(range(len(noise_scheduler)))[::-1]
-            generated_data = model.generate_sample()  # Assuming generate_sample is a method of MLP
-            np.save(output_folder / f"generated_data_epoch_{epoch}_batch_{batch_idx}.npy", generated_data)
-            model.train()
-    
-        print(f"Epoch {epoch} completed, loss: {loss.item()}")
-    
-    torch.save(model.state_dict(), output_folder / f"dino.pth")
-    print("Training completed.")
-
-    exit()
-    main(**vars(args))
     

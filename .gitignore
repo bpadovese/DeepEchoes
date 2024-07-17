@@ -17,6 +17,7 @@
 
 # Environment file
 .envrc
+.envrcs
 
 # cache
 .pytest_cache

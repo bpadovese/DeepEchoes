@@ -5,7 +5,8 @@ class NoiseScheduler():
                  num_timesteps=1000,
                  beta_start=0.0001,
                  beta_end=0.02,
-                 beta_schedule="linear"):
+                 beta_schedule="linear",
+                 device='cpu'):
         """
         Initializes the NoiseScheduler with the specified number of timesteps and beta schedule.
 
@@ -15,7 +16,7 @@ class NoiseScheduler():
             beta_end (float): Ending value for the beta scheduling.
             beta_schedule (str): Type of scheduling for beta values ('linear' or 'quadratic').
         """
-
+        self.device = device
         self.num_timesteps = num_timesteps
         # Betas represent the variance of the noise added at each timestep.
         if beta_schedule == "linear":
@@ -39,6 +40,8 @@ class NoiseScheduler():
         # Precomputed terms
         self.sqrt_alphas_cumprod = self.alphas_cumprod ** 0.5
         self.sqrt_one_minus_alphas_cumprod = (1 - self.alphas_cumprod) ** 0.5
+        self.sqrt_alphas_cumprod = self.sqrt_alphas_cumprod.to(self.device)
+        self.sqrt_one_minus_alphas_cumprod = self.sqrt_one_minus_alphas_cumprod.to(self.device)
 
         # required for reconstruct_x0
         self.sqrt_inv_alphas_cumprod = torch.sqrt(1 / self.alphas_cumprod)
@@ -66,10 +69,17 @@ class NoiseScheduler():
         """
         # Note that the function uses coefficients that are derived from the model’s understanding of how noise was added during the forward diffusion process.
         # This was statically set at the initialization of the nosie scheduler, that is, nit doesnt change
-        s1 = self.sqrt_inv_alphas_cumprod[t]
-        s2 = self.sqrt_inv_alphas_cumprod_minus_one[t]
-        s1 = s1.reshape(-1, 1)
-        s2 = s2.reshape(-1, 1)
+        s1 = self.sqrt_inv_alphas_cumprod[t].to(self.device)
+        s2 = self.sqrt_inv_alphas_cumprod_minus_one[t].to(self.device)
+
+        # Flexible reshaping based on the number of dimensions of x_t
+        # If you have fixed dimentions, you don't really need this. you can directly reshape to the shape you wish. 
+        # For instance, if your dataset is a 1D (batch_size, features) you can simply do .reshape(-1, 1)
+        num_dimensions = x_t.dim()  # Get the number of dimensions in x_t
+        reshape_dim = [-1] + [1] * (num_dimensions - 1)  # Create a reshape list
+        
+        s1 = s1.reshape(*reshape_dim) 
+        s2 = s2.reshape(*reshape_dim)
         return s1 * x_t - s2 * noise
 
     def q_posterior(self, x_0, x_t, t):
@@ -85,10 +95,15 @@ class NoiseScheduler():
         Returns:
             torch.Tensor: The mean of the posterior distribution, representing an estimate of the data state at the previous timestep.
         """
-        s1 = self.posterior_mean_coef1[t]
-        s2 = self.posterior_mean_coef2[t]
-        s1 = s1.reshape(-1, 1)
-        s2 = s2.reshape(-1, 1)
+        s1 = self.posterior_mean_coef1[t].to(self.device)
+        s2 = self.posterior_mean_coef2[t].to(self.device)
+
+        # Flexible reshaping based on the number of dimensions of x_0
+        num_dimensions = x_0.dim()  # Get the number of dimensions in x_0
+        reshape_dim = [-1] + [1] * (num_dimensions - 1)  # Create a reshape list
+        
+        s1 = s1.reshape(*reshape_dim) 
+        s2 = s2.reshape(*reshape_dim)
         mu = s1 * x_0 + s2 * x_t
         return mu
 
@@ -146,11 +161,15 @@ class NoiseScheduler():
         Returns:
             torch.Tensor: The noisy data after adding the noise.
         """
-        s1 = self.sqrt_alphas_cumprod[timesteps]
-        s2 = self.sqrt_one_minus_alphas_cumprod[timesteps]
-
-        s1 = s1.reshape(-1, 1)
-        s2 = s2.reshape(-1, 1)
+        s1 = self.sqrt_alphas_cumprod[timesteps].to(self.device)
+        s2 = self.sqrt_one_minus_alphas_cumprod[timesteps].to(self.device)
+        
+        # Flexible reshaping based on the number of dimensions of x_start
+        num_dimensions = x_start.dim()  # Get the number of dimensions in x_start
+        reshape_dim = [-1] + [1] * (num_dimensions - 1)  # Create a reshape list
+        
+        s1 = s1.reshape(*reshape_dim) 
+        s2 = s2.reshape(*reshape_dim)
 
         return s1 * x_start + s2 * x_noise
 

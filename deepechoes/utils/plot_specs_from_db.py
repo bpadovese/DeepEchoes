@@ -8,7 +8,9 @@ from matplotlib import pyplot as plt
 def plot_single_spec(hdf5_db, train_table, index=None):
     db = tables.open_file(hdf5_db, 'r')
     table = db.get_node(train_table + '/data')
-
+    print(table.attrs.min_value)
+    print(table.attrs.max_value)
+    exit()
     # If no index is provided, randomly sample one
     if index is None:
         index = random.randint(0, table.nrows - 1)

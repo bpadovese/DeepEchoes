@@ -8,6 +8,21 @@ from random import sample
 from ketos.data_handling.data_handling import find_files
 from deepechoes.constants import IMG_HEIGHT, IMG_WIDTH
 
+# Function to find the global min and max values in the dataset
+def find_global_min_max(dataset):
+    global_min = float('inf')
+    global_max = float('-inf')
+
+    for sample in dataset:
+        sample_min = sample.min().item()
+        sample_max = sample.max().item()
+
+        if sample_min < global_min:
+            global_min = sample_min
+        if sample_max > global_max:
+            global_max = sample_max
+    
+    return global_min, global_max
 
 # Define the data structure for the table
 class SpectrogramTable(tb.IsDescription):
@@ -94,6 +109,17 @@ def create_or_get_table(h5file, path, table_name, table_description):
         table = getattr(group, table_name)
     
     return table
+
+def save_dataset_attributes(node, attributes):
+    """
+    Save attributes to the given HDF5 node (table, group, etc.).
+
+    Parameters:
+    - node: The PyTables node (e.g., table or group) where the attributes will be saved.
+    - attributes: A dictionary of attributes to save.
+    """
+    for key, value in attributes.items():
+        node.attrs[key] = value
 
 def file_duration_table(path, datetime_format=None, num=None, exclude_subdir=None):
     """ Create file duration table.
