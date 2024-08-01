@@ -27,6 +27,7 @@
 docker/create/ketos
 
 # Development folders
+common
 annotations/
 Data
 Data/

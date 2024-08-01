@@ -24,13 +24,17 @@ def find_global_min_max(dataset):
     
     return global_min, global_max
 
-# Define the data structure for the table
-class SpectrogramTable(tb.IsDescription):
-    filename = tb.StringCol(100)  # Assuming filenames are strings with a max length of 100
-    offset = tb.Float32Col()      # Assuming offset is a float
-    id = tb.UInt32Col()      
-    label = tb.UInt8Col()      
-    data = tb.Float32Col(shape=(IMG_HEIGHT, IMG_WIDTH))  # Shape of the representation_data
+def create_table_description(item_shape):
+
+    # Define the data structure for the table
+    class SpectrogramTable(tb.IsDescription):
+        filename = tb.StringCol(100)  # Assuming filenames are strings with a max length of 100
+        offset = tb.Float32Col()      # Assuming offset is a float
+        id = tb.UInt32Col()      
+        label = tb.UInt8Col()      
+        data = tb.Float32Col(shape=item_shape)  # Shape of the representation_data
+    
+    return SpectrogramTable
 
 def insert_spectrogram_data(table, filename, offset, label, representation_data):
     """

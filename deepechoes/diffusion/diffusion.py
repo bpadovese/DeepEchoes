@@ -11,6 +11,7 @@ from deepechoes.diffusion.nn_architectures.mlp import MLP
 from deepechoes.diffusion.nn_architectures.unet import huggingface_unet, UNet
 from torch.utils.data import default_collate
 from diffusers import DDPMScheduler
+from PIL import Image
 import lightning as L
 import torch
 import numpy as np
@@ -92,7 +93,7 @@ def reverse_diffusion(fabric, model, num_timesteps, noise_scheduler, batch_shape
             noisy = noise_scheduler.step(noise_pred, t, noisy).prev_sample
     return noisy
 
-def create_image(samples, epoch, output_folder):
+def create_spec(samples, epoch, output_folder):
     # Save the evaluated image or any other required outputs
     image_folder = Path(output_folder) / "images"
     image_folder.mkdir(parents=True, exist_ok=True)
@@ -106,6 +107,27 @@ def create_image(samples, epoch, output_folder):
     plt.tight_layout()
     plt.savefig(image_folder / f"epoch_{epoch}.png", bbox_inches='tight', pad_inches=0)
     plt.close()
+
+def create_image(samples, epoch, output_folder):
+    # Save the evaluated image or any other required outputs
+    image_folder = Path(output_folder) / "images"
+    image_folder.mkdir(parents=True, exist_ok=True)
+
+    sample = samples[0]  # Remove the batch dimension
+    sample = sample.permute(1, 2, 0)  # Change shape to (128, 128, 3)
+    
+    # Normalize or scale the sample if needed
+    sample = (sample - sample.min()) / (sample.max() - sample.min())  # Normalize to [0, 1]
+    sample = (sample * 255).byte().cpu().numpy()  # Convert to byte and move to CPU
+
+    # Create an image from the numpy array
+    image = Image.fromarray(sample)
+
+    # Save the image
+    image_path = image_folder / f"epoch_{epoch}.png"
+    image.save(image_path)
+
+    print(f"Saved image at: {image_path}")
 
 def create_image_grid(samples, epoch, output_folder):
     # Save the evaluated images or any other required outputs
@@ -157,6 +179,27 @@ def main(dataset="dino", train_table='/train', output_folder=None, train_batch_s
             time_emb=time_embedding,
             input_emb=input_embedding)
         clip_sample = False # we dont want to clip the sample as the data are simply points in a cartesian plane
+    
+    elif dataset == "butterfly":
+        from datasets import load_from_disk
+        dataset = load_from_disk("datasets/smithsonian_butterflies_train")
+        from torchvision import transforms
+
+        preprocess = transforms.Compose(
+            [
+                transforms.Resize((128, 128)),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize([0.5], [0.5]),
+            ]
+        )
+        def transform(examples):
+            images = [preprocess(image.convert("RGB")) for image in examples["image"]]
+            return {"images": images}
+
+        dataset.set_transform(transform)
+        clip_sample = True
+        model = huggingface_unet()
     else:
         dataset = spec_dataset(dataset, train_table)
         normalize_transform = Normalize(dataset.min_value, dataset.max_value)
@@ -199,7 +242,7 @@ def main(dataset="dino", train_table='/train', output_folder=None, train_batch_s
         progress_bar.set_description(f"Epoch {epoch}")
         model.train()
         for step, batch in enumerate(data_loader):
-
+            batch = batch["images"]
             # start_time = time.time()  # Record the start time
             # print(batch_idx)
             batch_shape = batch.shape  # Get the shape of the batch

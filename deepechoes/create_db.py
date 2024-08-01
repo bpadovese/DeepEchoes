@@ -11,8 +11,8 @@ from matplotlib import pyplot as plt
 from ketos.data_handling import selection_table as sl
 from ketos.data_handling.parsing import load_audio_representation
 from deepechoes.constants import IMG_HEIGHT, IMG_WIDTH
-from deepechoes.utils.hdf5_helper import SpectrogramTable, insert_spectrogram_data, create_or_get_table, file_duration_table, save_dataset_attributes
-from deepechoes.utils.spec_preprocessing import invertible_representation, augmentation_representation_snapshot
+from deepechoes.utils.hdf5_helper import create_table_description, insert_spectrogram_data, create_or_get_table, file_duration_table, save_dataset_attributes
+from deepechoes.utils.spec_preprocessing import invertible_representation, augmentation_representation_snapshot, classifier_representation
 
 def load_data(path, start=None, end=None, new_sr=None):
     # Open the file to get the sample rate and total frames
@@ -101,14 +101,31 @@ def create_db(data_dir, audio_representation, annotations=None, annotation_step=
 
     # random_selections is a list where the first index is the number of samples to generate and the second index is the label to assign to the generations
     if random_selections is not None: 
+        num_segments = random_selections[0]
         if avoid_annotations is not None and annotations is None:
             annots = pd.read_csv(avoid_annotations)
             annots = sl.standardize(table=annots, trim_table=True, labels=labels)
+            if num_segments == 'same':
+                raise ValueError("The number of background samples to generate cannot be 'same' when avoid_annotations is being used.")
 
-        print(f'\nGenerating {random_selections[0]} samples with label {random_selections[1]}...')
+        if num_segments == 'same':
+            biggest_selection = float('-inf') 
+            for label in labels:
+                if len(selections[label]) > biggest_selection:
+                    biggest_selection = len(selections[label])
+
+            num_segments = biggest_selection
+
+        print(f'\nGenerating {num_segments} samples with label {random_selections[1]}...')
         files = file_duration_table(data_dir, num=None)
 
-        rando = sl.create_rndm_selections(files=files, length=config['duration'], annotations=annots, num=random_selections[0], label=random_selections[1])
+        if random_selections[2]:
+            with open(random_selections[2], 'r') as file:
+                filenames = file.read().splitlines()
+        
+        files = files[files['filename'].isin(filenames)]
+
+        rando = sl.create_rndm_selections(files=files, length=config['duration'], annotations=annots, num=num_segments, label=random_selections[1])
         del rando['duration'] # create_rndm selections returns the duration which we dont need. So lets delete it
 
         if labels is None:
@@ -134,10 +151,14 @@ def create_db(data_dir, audio_representation, annotations=None, annotation_step=
 
     print('\nCreating db...')
     with tb.open_file(output, mode='a') as h5file:
-        table = create_or_get_table(h5file, table_name, 'data', SpectrogramTable)
-        # Initialize global min and max values
+        table = create_or_get_table(h5file, table_name, 'data', create_table_description((128, 241)))
+        # Initialize global min and max values and sums
         global_min = float('inf')
         global_max = float('-inf')
+        global_sum = 0
+        global_sum_of_squares = 0
+        total_samples = 0
+
         for label in labels:
             print(f'\nAdding data with label {label} to table {table_name}...')
             selections_label = selections[label]
@@ -152,7 +173,7 @@ def create_db(data_dir, audio_representation, annotations=None, annotation_step=
                 
                 y, sr = load_data(path=Path(data_dir) / filename, start=start, end=start+config['duration'], new_sr=config['rate'])
                 
-                representation_data = invertible_representation(y, config["window"], config["step"], sr, config["num_filters"], fmin=0, fmax=8000)
+                representation_data = classifier_representation(y, config["window"], config["step"], sr, config["num_filters"], fmin=0, fmax=8000)
                 
                 # Update global min and max
                 current_min = representation_data.min()
@@ -161,12 +182,24 @@ def create_db(data_dir, audio_representation, annotations=None, annotation_step=
                     global_min = current_min
                 if current_max > global_max:
                     global_max = current_max
-                # print(current_max)
+                
+                # Update global sum and sum of squares
+                global_sum += representation_data.sum()
+                global_sum_of_squares += np.square(representation_data).sum()
+                total_samples += np.prod(representation_data.shape)
+
                 insert_spectrogram_data(table, filename, start, label, representation_data)
         
+        # Calculate mean and standard deviation
+        global_mean = global_sum / total_samples
+        global_variance = (global_sum_of_squares / total_samples) - (global_mean ** 2)
+        global_std = np.sqrt(global_variance)
+
         attributes = {
             "min_value": global_min,
-            "max_value": global_max
+            "max_value": global_max,
+            "mean_value": global_mean,
+            "std_value": global_std
         }
 
         save_dataset_attributes(table, attributes)
@@ -188,6 +221,15 @@ def main():
                     val = int(val)
                 getattr(namespace, self.dest)[key] = val
 
+    class RandomSelectionsAction(argparse.Action):
+        def __call__(self, parser, namespace, values, option_string=None):
+            if len(values) < 2:
+                parser.error("--random_selections requires at least two arguments")
+            x = values[0] if values[0] == 'same' else int(values[0])
+            y = int(values[1])
+            z = values[2] if len(values) > 2 else None
+            setattr(namespace, self.dest, (x, y, z))
+
     # parse command-line args
     parser = argparse.ArgumentParser()
     parser.add_argument('data_dir', type=str, help='Path to the directory containing the audio files')
@@ -199,7 +241,8 @@ def main():
     parser.add_argument('--labels', default=None, nargs='*', action=ParseKwargs, help='Specify a label mapping. Example: --labels background=0 upcall=1 will map labels with the string background to 0 and labels with string upcall to 1. \
         Any label not included in this mapping will be discarded. If None, will save every label in the annotation csv and will map the labels to 0, 1, 2, 3....')
     parser.add_argument('--table_name', default=None, type=str, help="Table name within the database where the data will be stored. Must start with a foward slash. For instance '/train'")
-    parser.add_argument('--random_selections', default=None, nargs='+', type=int, help='Will generate random x number of samples with label y. --random_selections x y')
+    parser.add_argument('--random_selections', default=None, nargs='+', type=str, action=RandomSelectionsAction, help='Will generate random x number of samples with label y. By default, all files in the data_dir and subdirectories will be used.  \
+                        To limit this, pass a .txt file with the list of filenames relative to data/dir to sample from. --random_selections x y z (Where z is the optional text file)')
     parser.add_argument('--n_samples', default=None, type=int, help='randomly select n samples from the annotations')
     parser.add_argument('--avoid_annotations', default=None, type=str, help="Path to .csv file with annotations of upcalls to avoid. Only used with --random_selections. If the annotations option is being used, this argument is ignored.")
     parser.add_argument('--seed', default=None, type=int, help='Seed for random number generator')
