@@ -10,7 +10,8 @@ from matplotlib import pyplot as plt
 from deepechoes.diffusion.nn_architectures.mlp import MLP
 from deepechoes.diffusion.nn_architectures.unet import huggingface_unet, UNet
 from torch.utils.data import default_collate
-from diffusers import DDPMScheduler
+from diffusers import DDPMScheduler, DDPMPipeline
+from diffusers.optimization import get_cosine_schedule_with_warmup
 from PIL import Image
 import lightning as L
 import torch
@@ -181,8 +182,9 @@ def main(dataset="dino", train_table='/train', output_folder=None, train_batch_s
         clip_sample = False # we dont want to clip the sample as the data are simply points in a cartesian plane
     
     elif dataset == "butterfly":
+        print("Loading butterfly dataset")
         from datasets import load_from_disk
-        dataset = load_from_disk("datasets/smithsonian_butterflies_train")
+        dataset = load_from_disk("common/datasets/smithsonian_butterflies_train")
         from torchvision import transforms
 
         preprocess = transforms.Compose(
@@ -210,11 +212,12 @@ def main(dataset="dino", train_table='/train', output_folder=None, train_batch_s
     data_loader = DataLoader(
             dataset, batch_size=train_batch_size, shuffle=True, drop_last=False, collate_fn=custom_collate
         )
-    
+    print(len(data_loader))
     # noise_scheduler = NoiseScheduler(
     #     num_timesteps=num_timesteps,
     #     beta_schedule=beta_schedule,
     #     device=fabric.device)
+    print(f"Setting up DDPMScheduler with {num_timesteps} timesteps...")
     noise_scheduler = DDPMScheduler(num_train_timesteps=num_timesteps, clip_sample=clip_sample)
 
     optimizer = torch.optim.AdamW(
@@ -222,7 +225,13 @@ def main(dataset="dino", train_table='/train', output_folder=None, train_batch_s
         lr=learning_rate,
     )
 
-    model, optimizer = fabric.setup(model, optimizer)
+    lr_scheduler = get_cosine_schedule_with_warmup(
+        optimizer=optimizer,
+        num_warmup_steps=500,
+        num_training_steps=(len(data_loader) * num_epochs),
+    )
+
+    model, optimizer, lr_scheduler = fabric.setup(model, optimizer, lr_scheduler)
     data_loader = fabric.setup_dataloaders(data_loader)
 
     if output_folder is None:
@@ -257,16 +266,18 @@ def main(dataset="dino", train_table='/train', output_folder=None, train_batch_s
             noise_pred = get_model_output(model, noisy, timesteps)
 
             loss = torch.nn.functional.mse_loss(noise_pred, noise)
-            optimizer.zero_grad()
+            
             fabric.backward(loss)
-            fabric.clip_gradients(model, optimizer, clip_val=1.0)
+            fabric.clip_gradients(model, optimizer, max_norm=1.0)
             # nn.utils.clip_grad_norm_(model.parameters(), 1.0) # Clipping to prevent the gradients from exploding
 
             ### UPDATE MODEL PARAMETERS
             optimizer.step()
+            lr_scheduler.step()
+            optimizer.zero_grad()
             
             progress_bar.update(1)
-            logs = {"loss": loss.detach().item(), "step": global_step}
+            logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0], "step": global_step}
             progress_bar.set_postfix(**logs)
             losses.append(loss.detach().item())
 

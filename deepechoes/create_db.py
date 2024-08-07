@@ -123,7 +123,7 @@ def create_db(data_dir, audio_representation, annotations=None, annotation_step=
             with open(random_selections[2], 'r') as file:
                 filenames = file.read().splitlines()
         
-        files = files[files['filename'].isin(filenames)]
+            files = files[files['filename'].isin(filenames)]
 
         rando = sl.create_rndm_selections(files=files, length=config['duration'], annotations=annots, num=num_segments, label=random_selections[1])
         del rando['duration'] # create_rndm selections returns the duration which we dont need. So lets delete it
