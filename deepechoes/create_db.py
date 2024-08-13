@@ -11,8 +11,9 @@ from matplotlib import pyplot as plt
 from ketos.data_handling import selection_table as sl
 from ketos.data_handling.parsing import load_audio_representation
 from deepechoes.constants import IMG_HEIGHT, IMG_WIDTH
-from deepechoes.utils.hdf5_helper import create_table_description, insert_spectrogram_data, create_or_get_table, file_duration_table, save_dataset_attributes
+from deepechoes.utils.hdf5_helper import create_table_description, insert_spectrogram_data, create_or_get_table, save_dataset_attributes
 from deepechoes.utils.spec_preprocessing import invertible_representation, augmentation_representation_snapshot, classifier_representation
+from deepechoes.utils.dev_utils import file_duration_table
 
 def load_data(path, start=None, end=None, new_sr=None):
     # Open the file to get the sample rate and total frames
@@ -151,7 +152,10 @@ def create_db(data_dir, audio_representation, annotations=None, annotation_step=
 
     print('\nCreating db...')
     with tb.open_file(output, mode='a') as h5file:
-        table = create_or_get_table(h5file, table_name, 'data', create_table_description((128, 241)))
+        # Loading one sample to get the table shape
+        y, sr = load_data(path=Path(data_dir) / selections[0].iloc[0].name[0], start=0, end=config['duration'], new_sr=config['rate'])
+        sp = classifier_representation(y, config["window"], config["step"], sr, config["num_filters"], fmin=config["fmin"], fmax=config["fmax"]).shape
+        table = create_or_get_table(h5file, table_name, 'data', create_table_description(sp))
         # Initialize global min and max values and sums
         global_min = float('inf')
         global_max = float('-inf')
@@ -160,7 +164,7 @@ def create_db(data_dir, audio_representation, annotations=None, annotation_step=
         total_samples = 0
 
         for label in labels:
-            print(f'\nAdding data with label {label} to table {table_name}...')
+            print(f'\nAdding data with label {label} to table {table_name} with shape {sp}...')
             selections_label = selections[label]
             if n_samples is not None:
                 # Filter the DataFrame by the label
@@ -173,8 +177,8 @@ def create_db(data_dir, audio_representation, annotations=None, annotation_step=
                 
                 y, sr = load_data(path=Path(data_dir) / filename, start=start, end=start+config['duration'], new_sr=config['rate'])
                 
-                representation_data = classifier_representation(y, config["window"], config["step"], sr, config["num_filters"], fmin=0, fmax=8000)
-                
+                representation_data = classifier_representation(y, config["window"], config["step"], sr, config["num_filters"], fmin=config["fmin"], fmax=config["fmax"])
+
                 # Update global min and max
                 current_min = representation_data.min()
                 current_max = representation_data.max()

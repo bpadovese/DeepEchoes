@@ -3,33 +3,7 @@ import pandas as pd
 import numpy as np
 import tables
 from torch.utils.data import Dataset, TensorDataset
-
-# class HDF5Dataset(Dataset):
-#     def __init__(self, table, transform=None):
-#         self.table = table
-#         self.transform = transform
-
-#         # Retrieve min and max values from table attributes
-#         self.min_value = self.table.attrs.min_value
-#         self.max_value = self.table.attrs.max_value
-
-#     def __len__(self):
-#         return self.table.nrows
-
-#     def __getitem__(self, idx):
-#         data = self.table[idx]['data']
-#         sample = torch.tensor(data, dtype=torch.float32).unsqueeze(0)  # Add channel dimension
-
-#         if self.transform:
-#             sample = self.transform(sample)
-
-#         return sample
-    
-#     def set_transform(self, transform):
-#         self.transform = transform
-
-#     def __del__(self):
-#         self.table._v_file.close()
+from torchvision import transforms
 
 class HDF5Dataset(Dataset):
     def __init__(self, hdf5_file, table_name, transform=None):
@@ -112,3 +86,10 @@ def dino_dataset(n=8000):
     X = np.stack((x, y), axis=1)
     return TensorDataset(torch.from_numpy(X.astype(np.float32)))
 
+
+def apply_transforms(representation_data_tensor, shape):
+    resize_transform = transforms.Resize(shape)
+    normalization = NormalizeToRange(new_min=-1, new_max=1)
+    representation_data_tensor = resize_transform(representation_data_tensor)
+    representation_data_tensor = normalization(representation_data_tensor)
+    return representation_data_tensor

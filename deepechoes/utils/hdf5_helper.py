@@ -1,12 +1,5 @@
 import tables as tb
 import numpy as np
-import pandas as pd
-import os
-from ketos.data_handling.data_handling import parse_datetime
-from ketos.audio.waveform import get_duration
-from random import sample
-from ketos.data_handling.data_handling import find_files
-from deepechoes.constants import IMG_HEIGHT, IMG_WIDTH
 
 # Function to find the global min and max values in the dataset
 def find_global_min_max(dataset):
@@ -125,38 +118,3 @@ def save_dataset_attributes(node, attributes):
     for key, value in attributes.items():
         node.attrs[key] = value
 
-def file_duration_table(path, datetime_format=None, num=None, exclude_subdir=None):
-    """ Create file duration table.
-
-        Args:
-            path: str
-                Path to folder with audio files (\*.wav)
-            datetime_format: str
-                String defining the date-time format. 
-                Example: %d_%m_%Y* would capture "14_3_1999.txt".
-                See https://pypi.org/project/datetime-glob/ for a list of valid directives.
-                If specified, the method will attempt to parse the datetime information from the filename.
-            num: int
-                Randomly sample a number of files
-            exclude_subdir: str
-                Exclude subdir from the search 
-
-        Returns:
-            df: pandas DataFrame
-                File duration table. Columns: filename, duration, (datetime)
-    """
-    paths = find_files(path=path, substr=['.wav', '.WAV', '.flac', '.FLAC'], search_subdirs=True, return_path=True)
-
-    if exclude_subdir is not None:
-        paths = [path for path in paths if exclude_subdir not in path]
-
-    if num is not None:
-        paths = sample(paths, num)
-
-    durations = get_duration([os.path.join(path,p) for p in paths])
-    df = pd.DataFrame({'filename':paths, 'duration':durations})
-    if datetime_format is None:
-        return df
-
-    df['datetime'] = df.apply(lambda x: parse_datetime(os.path.basename(x.filename), fmt=datetime_format), axis=1)
-    return df
