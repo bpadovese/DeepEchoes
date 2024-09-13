@@ -1,6 +1,6 @@
 import numpy as np
 import pytest
-from deepechoes.utils.image_transforms import rotate_images_and_labels
+from deepechoes.dev_utils.image_transforms import rotate_images_and_labels
 
 def test_rotate_images_and_labels():
   batch_size, height, width, channels = 2, 4, 4, 3 

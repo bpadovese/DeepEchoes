@@ -1,10 +1,8 @@
 import pandas as pd
 import os
-import soundfile as sf
-import librosa
 from pathlib import Path
 from random import sample
-
+from deepechoes.dev_utils.audio_processing import get_duration
 
 def find_files(path, substr, return_path=True, search_subdirs=False, search_path=False):
     """Find all files in the specified directory containing the specified substring in their file name or path.
@@ -44,23 +42,6 @@ def find_files(path, substr, return_path=True, search_subdirs=False, search_path
             matching_files.append(str(relative_path) if return_path else file.name)
 
     return sorted(matching_files)
-
-
-def get_duration(file_paths):
-    """Calculate the durations of multiple audio files.
-
-    Args:
-        file_paths (list): List of paths to audio files.
-
-    Returns:
-        list: Durations of the audio files in seconds.
-    """
-    durations = []
-    for file_path in file_paths:
-        with sf.SoundFile(file_path) as sound_file:
-            durations.append(len(sound_file) / sound_file.samplerate)
-    return durations
-
 
 def file_duration_table(path, num=None, exclude_subdir=None):
     """ Create file duration table.

@@ -2,7 +2,7 @@ import tables
 import argparse
 import random
 from pathlib import Path
-from deepechoes.utils.image_transforms import unscale_data
+from deepechoes.dev_utils.image_transforms import unscale_data
 from matplotlib import pyplot as plt
 
 def plot_single_spec(hdf5_db, train_table, index=None):

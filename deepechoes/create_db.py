@@ -1,57 +1,17 @@
-from scipy.signal import butter, sosfilt
-import librosa
-from tqdm import tqdm
 import numpy as np
 import os
 import tables as tb
-import soundfile as sf
 import pandas as pd
+import json
+import librosa
+from tqdm import tqdm
+from scipy.signal import butter, sosfilt
 from pathlib import Path
-from matplotlib import pyplot as plt
-from ketos.data_handling import selection_table as sl
-from ketos.data_handling.parsing import load_audio_representation
-from deepechoes.constants import IMG_HEIGHT, IMG_WIDTH
-from deepechoes.utils.hdf5_helper import create_table_description, insert_spectrogram_data, create_or_get_table, save_dataset_attributes
-from deepechoes.utils.spec_preprocessing import invertible_representation, augmentation_representation_snapshot, classifier_representation
-from deepechoes.utils.dev_utils import file_duration_table
-
-def load_data(path, start=None, end=None, new_sr=None):
-    # Open the file to get the sample rate and total frames
-    
-    with sf.SoundFile(path) as file:
-        sr = file.samplerate
-        total_frames = file.frames
-        file_duration = total_frames / sr  # Duration of the file in seconds
-
-        # Default to the full file if neither start nor end is provided
-        if start is None and end is None:
-            start, end = 0, file_duration
-        
-        # Adjust start time if it's negative, and dynamically adjust the end time to maintain duration
-        if start is not None and start < 0:
-            end += -start  # Adjust end time by the amount start time was negative
-            start = 0
-
-        # Ensure end time does not exceed the file's duration
-        if end is not None and end > file_duration:
-            start = max(start - (end - file_duration), 0)
-            end = file_duration
-
-        # Convert start and end times to frame indices
-        start_frame = int(start * sr)
-        end_frame = int(end * sr)
-        
-        # Read the specific segment of the audio file
-        file.seek(start_frame)
-        audio_segment = file.read(end_frame - start_frame)
-
-    return_sr = sr
-    # Resample the audio segment if new sample rate is provided
-    if new_sr is not None:
-        audio_segment = librosa.resample(audio_segment, orig_sr=sr, target_sr=new_sr)
-        return_sr = new_sr
-    
-    return audio_segment, return_sr
+from deepechoes.dev_utils.audio_processing import load_audio
+from deepechoes.dev_utils.annotation_processing import standardize, define_segments, generate_time_shifted_instances, create_random_segments
+from deepechoes.dev_utils.hdf5_helper import create_table_description, insert_spectrogram_data, create_or_get_table, save_dataset_attributes
+from deepechoes.dev_utils.spec_preprocessing import invertible_representation, augmentation_representation_snapshot, classifier_representation
+from deepechoes.dev_utils.file_management import file_duration_table
 
 def high_pass_filter(sig, rate, order=10, freq=400):
     butter_filter = butter(N=order, fs=rate, Wn=freq,btype="highpass",output="sos")
@@ -63,53 +23,58 @@ def create_db(data_dir, audio_representation, annotations=None, annotation_step=
               output=None, table_name=None, random_selections=None, avoid_annotations=None, overwrite=False, seed=None, 
               n_samples=None):
     
-    #initialiaze random seed
+    # Initialize random seed for reproducibility
     if seed is not None:
         np.random.seed(seed)
 
+    # Raise an exception if both annotations and random_selections are None
     if random_selections is None and annotations is None:
         raise Exception("Missing value: Either annotations or random_selection must be defined.") 
 
     selections = {}
     
-    #load the audio representation. We are currently only allowing 1
-    config = load_audio_representation(audio_representation)
-    config = config[list(config.keys())[0]]
+    # Open and read the audio configuration file (e.g., JSON file with audio settings)
+    with open(audio_representation, 'r') as f:
+        config = json.load(f)
 
     annots = None
-    if annotations is not None: # if an annotation table is given
+    if annotations is not None: # If an annotation table is provided
         annots = pd.read_csv(annotations)
-
-        if labels is None:
-            labels = annots.label.unique().tolist() # For each unique label
+        annots = standardize(annots, labels=labels) # Standardize annotations by mapping labels to integers
+        
+        # Get the list of labels after processing
+        labels = annots.label.unique().tolist()
    
-        annots = sl.standardize(table=annots, trim_table=True, labels=labels) #standardize to ketos format and remove extra columns
-        annots['label'] = annots['label'].astype(int)
-
-        labels = annots.label.unique().tolist() # get the actual list of labels after all the processing
-   
-        # removing label -1
+        # Remove any label equal to -1 (an "ignore" label)
         labels = [label for label in labels if label != -1]
 
-        if 'start' in annots.columns and 'end' in annots.columns: # Checking if start and end times are in the dataframe
+        # Check if start and end times are present in the annotation dataframe
+        if 'start' in annots.columns and 'end' in annots.columns:
             for label in labels:
-                selections[label] = sl.select(annotations=annots, length=config['duration'], step=annotation_step, min_overlap=step_min_overlap, center=False, label=[label]) #create the selections
-        else: # if not, than the annotations are already the selections
-            
+                # Define segments for the given label based on annotation data
+                selections[label] = define_segments(annots, duration=config['duration'], center=False)
+
+                # If annotation_step is set, create time-shifted instances
+                if annotation_step > 0:
+                    shifted_segments = generate_time_shifted_instances(selections[label], step=annotation_step, min_overlap=step_min_overlap)
+                    # Concatenate the original segments with the new time-shifted instances
+                    selections[label] = pd.concat([selections[label], shifted_segments], ignore_index=True)
+        else:
+            # If start and end are not present, treat annotations as selections directly 
             for label in labels:
                 selections[label] = annots.loc[annots['label'] == label]
-                
 
-    # random_selections is a list where the first index is the number of samples to generate and the second index is the label to assign to the generations
+    # Handle random selections for generating new random segments
     if random_selections is not None: 
-        num_segments = random_selections[0]
-        if avoid_annotations is not None and annotations is None:
+        num_segments = random_selections[0] # Number of segments to generate
+        if avoid_annotations is not None and annotations is None: # Avoid areas with existing annotations
             annots = pd.read_csv(avoid_annotations)
-            annots = sl.standardize(table=annots, trim_table=True, labels=labels)
+            annots = standardize(annots, labels=labels)
+            
             if num_segments == 'same':
                 raise ValueError("The number of background samples to generate cannot be 'same' when avoid_annotations is being used.")
 
-        if num_segments == 'same':
+        if num_segments == 'same': # If num_segments is 'same', generate as many samples as the largest selection
             biggest_selection = float('-inf') 
             for label in labels:
                 if len(selections[label]) > biggest_selection:
@@ -120,14 +85,14 @@ def create_db(data_dir, audio_representation, annotations=None, annotation_step=
         print(f'\nGenerating {num_segments} samples with label {random_selections[1]}...')
         files = file_duration_table(data_dir, num=None)
 
+        # If filenames are provided, filter the file list based on them
         if random_selections[2]:
             with open(random_selections[2], 'r') as file:
                 filenames = file.read().splitlines()
-        
             files = files[files['filename'].isin(filenames)]
-
-        rando = sl.create_rndm_selections(files=files, length=config['duration'], annotations=annots, num=num_segments, label=random_selections[1])
-        del rando['duration'] # create_rndm selections returns the duration which we dont need. So lets delete it
+        
+        # Generate random segments based on the file durations and label
+        rando = create_random_segments(files, config['duration'], num_segments, label=random_selections[1], annotations=annots)
 
         if labels is None:
             labels = []
@@ -152,31 +117,42 @@ def create_db(data_dir, audio_representation, annotations=None, annotation_step=
 
     print('\nCreating db...')
     with tb.open_file(output, mode='a') as h5file:
-        # Loading one sample to get the table shape
-        y, sr = load_data(path=Path(data_dir) / selections[0].iloc[0].name[0], start=0, end=config['duration'], new_sr=config['rate'])
+        # Load the first sample to determine the table shape
+        first_key = labels[0]
+        y, sr = load_audio(path=Path(data_dir) / selections[first_key].iloc[0]['filename'], start=0, end=config['duration'], new_sr=config['sr'])
         sp = classifier_representation(y, config["window"], config["step"], sr, config["num_filters"], fmin=config["fmin"], fmax=config["fmax"]).shape
         table = create_or_get_table(h5file, table_name, 'data', create_table_description(sp))
-        # Initialize global min and max values and sums
+        
+        # Initialize global min, max, sum, and sum of squares for normalization
         global_min = float('inf')
         global_max = float('-inf')
         global_sum = 0
         global_sum_of_squares = 0
         total_samples = 0
 
+        # Loop through each label and add its data to the table
         for label in labels:
             print(f'\nAdding data with label {label} to table {table_name} with shape {sp}...')
             selections_label = selections[label]
+            
+            # If n_samples is specified, randomly sample from the selections
             if n_samples is not None:
-                # Filter the DataFrame by the label
                 selections_label = selections_label.sample(n=n_samples)  
 
-            for (filename, sel_id), row in tqdm(selections_label.iterrows(), total=selections_label.shape[0]):
+            for _, row in tqdm(selections_label.iterrows(), total=selections_label.shape[0]):
                 start = 0
                 if 'start' in row.index:
                     start = row['start']
+
+                file_path = os.path.join(data_dir, row['filename'])
                 
-                y, sr = load_data(path=Path(data_dir) / filename, start=start, end=start+config['duration'], new_sr=config['rate'])
-                
+                file_duration = librosa.get_duration(path=file_path)
+                if start >= file_duration: # I know this check is bizarre. but because we have some very long annotations that span two files, sometimes, when using a small duration window, and trying to centralize this window, it may end up entirely in the second file. I then adjust to try to at least span 2 files. Very rare.
+                    start = file_duration - config['duration'] / 2 # the following two lines set the duration of the segment to be between two files
+                end = start + config['duration']
+
+                # Load audio segment and create its representation
+                y, sr = load_audio(path=file_path, start=start, end=end, new_sr=config['sr'])
                 representation_data = classifier_representation(y, config["window"], config["step"], sr, config["num_filters"], fmin=config["fmin"], fmax=config["fmax"])
 
                 # Update global min and max
@@ -192,13 +168,15 @@ def create_db(data_dir, audio_representation, annotations=None, annotation_step=
                 global_sum_of_squares += np.square(representation_data).sum()
                 total_samples += np.prod(representation_data.shape)
 
-                insert_spectrogram_data(table, filename, start, label, representation_data)
+                # Insert spectrogram data into the table
+                insert_spectrogram_data(table, row['filename'], start, label, representation_data)
         
         # Calculate mean and standard deviation
         global_mean = global_sum / total_samples
         global_variance = (global_sum_of_squares / total_samples) - (global_mean ** 2)
         global_std = np.sqrt(global_variance)
 
+        # Store dataset attributes in the table (min, max, mean, std)
         attributes = {
             "min_value": global_min,
             "max_value": global_max,
@@ -207,6 +185,7 @@ def create_db(data_dir, audio_representation, annotations=None, annotation_step=
         }
 
         save_dataset_attributes(table, attributes)
+
 def main():
     import argparse
 

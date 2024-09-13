@@ -4,8 +4,8 @@ import numpy as np
 from matplotlib import pyplot as plt
 from tqdm import tqdm
 from pathlib import Path
-from deepechoes.utils.image_transforms import unscale_data
-from deepechoes.utils.hdf5_helper import insert_spectrogram_data, create_or_get_table, SpectrogramTable
+from deepechoes.dev_utils.image_transforms import unscale_data
+from deepechoes.dev_utils.hdf5_helper import insert_spectrogram_data, create_or_get_table, SpectrogramTable
 
 
 def load_generator(model_path):

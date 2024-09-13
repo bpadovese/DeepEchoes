@@ -1,6 +1,6 @@
 import time
 import tensorflow as tf
-from deepechoes.utils.image_transforms import unscale_data
+from deepechoes.dev_utils.image_transforms import unscale_data
 from pathlib import Path
 from matplotlib import pyplot as plt
 

@@ -1,7 +1,7 @@
 from diffusers import DiffusionPipeline
 from pathlib import Path
 from tqdm import tqdm
-from deepechoes.utils.hdf5_helper import insert_spectrogram_data, create_or_get_table, create_table_description
+from deepechoes.dev_utils.hdf5_helper import insert_spectrogram_data, create_or_get_table, create_table_description
 import tables as tb
 import matplotlib.pyplot as plt
 import math
@@ -45,18 +45,30 @@ def make_grid_spec(images, cols):
     plt.tight_layout()
     return fig
 
-def multiple_spec_gen():
-    # Load the diffusion model
-    generator = DiffusionPipeline.from_pretrained("trained_models/diffusion/accelerate").to("cuda")
+def multiple_spec_gen(model_path, num_samples, output_path='.', batch_size=8, num_inference_steps=1000):
+    if output_path is None:
+        output_path = Path('.').resolve()
+    else:
+        output_path = Path(output_path).resolve()
 
-    # Generate an image
-    images = generator(batch_size=8, output_type="nd.array", num_inference_steps=1000).images
-    spec_grid = make_grid_spec(images, cols=4)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    # Load the diffusion model
+    generator = DiffusionPipeline.from_pretrained(model_path).to("cuda")
+    generator.set_progress_bar_config(disable=True)
+
     
-    # Save the figure
-    spec_grid.savefig('spectrogram_grid.png', bbox_inches='tight')
     
-# multiple_spec_gen()
+    num_batches = (num_samples + batch_size - 1) // batch_size 
+    for batch_num in tqdm(range(num_batches)):
+        batch_size_adjusted = min(batch_size, num_samples - batch_num * batch_size) # calculate the batch size for the current batch (will be different for the last batch)
+        
+        # Generate an image
+        images = generator(batch_size=batch_size_adjusted, output_type="nd.array", num_inference_steps=num_inference_steps).images
+        spec_grid = make_grid_spec(images, cols=4)
+        # Save the figure
+        spec_grid.savefig(output_path / f'{str(batch_num)}.png', bbox_inches='tight')
+
 
 def diffusion_generate_to_hdf5(model_path, num_samples, output_path='diffusion.h5', table_name='/train', label=1, batch_size=8, num_inference_steps=1000):
     if output_path is None:
@@ -110,7 +122,8 @@ def main():
 
     if mode == 'hdf5':
         diffusion_generate_to_hdf5(args.model_path, args.num_samples, args.output_path, args.table_name, args.label, args.batch_size, args.num_inference_steps)
-    
+    else:
+        multiple_spec_gen(args.model_path, args.num_samples, args.output_path, args.batch_size, args.num_inference_steps)
 
 if __name__ == "__main__":
     main()

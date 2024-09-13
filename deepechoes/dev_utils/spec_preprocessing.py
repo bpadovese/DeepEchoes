@@ -1,9 +1,9 @@
 import numpy as np
 import librosa
 import skimage
-from deepechoes.utils.image_transforms import scale_to_range, normalize_to_zero_mean_unit_variance
+from deepechoes.dev_utils.image_transforms import scale_to_range, normalize_to_zero_mean_unit_variance
 from deepechoes.constants import IMG_HEIGHT, IMG_WIDTH
-from deepechoes.utils.spec_to_wav import spec_to_wav
+from deepechoes.dev_utils.spec_to_wav import spec_to_wav
 
 def invertible_representation(y, window, step, sr, n_mels, fmin=0, fmax=8000):
     # Converting windows size and step size to nfft and hop length (in frames) because librosa uses that.
