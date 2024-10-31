@@ -21,7 +21,7 @@ def high_pass_filter(sig, rate, order=10, freq=400):
 
 def create_db(data_dir, audio_representation, annotations=None, annotation_step=0, step_min_overlap=0.5, labels=None, 
               output=None, table_name=None, random_selections=None, avoid_annotations=None, overwrite=False, seed=None, 
-              n_samples=None):
+              n_samples=None, only_augmented=False):
     
     # Initialize random seed for reproducibility
     if seed is not None:
@@ -57,8 +57,13 @@ def create_db(data_dir, audio_representation, annotations=None, annotation_step=
                 # If annotation_step is set, create time-shifted instances
                 if annotation_step > 0:
                     shifted_segments = generate_time_shifted_instances(selections[label], step=annotation_step, min_overlap=step_min_overlap)
-                    # Concatenate the original segments with the new time-shifted instances
-                    selections[label] = pd.concat([selections[label], shifted_segments], ignore_index=True)
+
+                    if only_augmented:
+                        # Only include the time-shifted segments and discard the original ones
+                        selections[label] = shifted_segments
+                    else:
+                        # Concatenate the original segments with the new time-shifted instances
+                        selections[label] = pd.concat([selections[label], shifted_segments], ignore_index=True)
         else:
             # If start and end are not present, treat annotations as selections directly 
             for label in labels:
@@ -231,9 +236,25 @@ def main():
     parser.add_argument('--seed', default=None, type=int, help='Seed for random number generator')
     parser.add_argument('--output', default=None, type=str, help='HDF5 dabase name. For isntance: db.h5')
     parser.add_argument('--overwrite', default=False, type=boolean_string, help='Overwrite the database. Otherwise append to it')
+    parser.add_argument('--only_augmented', default=False, type=boolean_string, help='Only include time-shifted instances without original annotations')
     args = parser.parse_args()
 
-    create_db(**vars(args))
+    create_db(
+        data_dir=args.data_dir,
+        audio_representation=args.audio_representation,
+        annotations=args.annotations,
+        annotation_step=args.annotation_step,
+        step_min_overlap=args.step_min_overlap,
+        labels=args.labels,
+        output=args.output,
+        table_name=args.table_name,
+        random_selections=args.random_selections,
+        avoid_annotations=args.avoid_annotations,
+        overwrite=args.overwrite,
+        seed=args.seed,
+        n_samples=args.n_samples,
+        only_augmented=args.only_augmented
+    )
 
 if __name__ == "__main__":
     main()

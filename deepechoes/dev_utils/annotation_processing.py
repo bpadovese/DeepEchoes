@@ -175,6 +175,28 @@ def generate_time_shifted_instances(df, step, min_overlap=0.5, duration=3.0, inc
     
     return shifted_df
 
+def white_noise(spectrogram, noise_factor=0.005):
+    """
+    Adds random noise to a spectrogram.
+    
+    Parameters:
+    - spectrogram (np.ndarray): The input spectrogram to add noise to.
+    - noise_factor (float): The scaling factor for the noise.
+    
+    Returns:
+    - np.ndarray: The noisy spectrogram.
+    """
+    # Generate random Gaussian noise
+    noise = np.random.randn(*spectrogram.shape)
+    
+    # Add the noise to the spectrogram, scaled by the noise factor
+    noisy_spectrogram = spectrogram + noise_factor * noise
+    
+    # Clip the values to maintain them within a valid range, if needed
+    noisy_spectrogram = np.clip(noisy_spectrogram, spectrogram.min(), spectrogram.max())
+    
+    return noisy_spectrogram
+
 def create_random_segments(files, duration, num, label=0, annotations=None, buffer=0, max_attempts_per_file=5):
     """
     Generates a specified number of random audio segments from a list of files, ensuring no overlap with annotations.

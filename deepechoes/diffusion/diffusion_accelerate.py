@@ -8,7 +8,8 @@ from torchvision import transforms
 from diffusers.optimization import get_cosine_schedule_with_warmup
 from deepechoes.diffusion.nn_architectures.unet import huggingface_unet
 from matplotlib import pyplot as plt
-from deepechoes.diffusion.dataset import HDF5Dataset, NormalizeToRange
+from deepechoes.diffusion.dataset import HDF5Dataset, NormalizeToRange, get_leaf_paths
+from torch.utils.data import ConcatDataset, DataLoader
 import os
 import math
 import numpy as np
@@ -146,6 +147,24 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
             if (epoch + 1) % config['save_model_epochs'] == 0 or epoch == config['num_epochs'] - 1:
                 pipeline.save_pretrained(config['output_dir'])
 
+
+def select_transform(norm_type, image_size, dataset_min=None, dataset_max=None, dataset_mean=None, dataset_std=None):
+    match norm_type:
+        case 0:
+            # Default: Sample-Wise Normalization [-1, 1]
+            return transforms.Compose([
+                transforms.Resize((image_size, image_size)),
+                NormalizeToRange(new_min=-1, new_max=1)  # Normalize sample-wise
+            ])
+        case 1:
+            # Feature-wise normalization to [-1, 1]
+            return transforms.Compose([
+                transforms.Resize((image_size, image_size)),
+                NormalizeToRange(min_value=dataset_min, max_value=dataset_max, new_min=-1, new_max=1)  # Normalize feature-wise
+            ])
+        case _:
+            raise ValueError("Invalid norm_type value. It should be between 0 and 1.")
+        
 def main(dataset="butterfly", train_table="/train", image_size=128, train_batch_size=8, eval_batch_size=8, 
          num_epochs=50, num_timesteps=1000, gradient_accumulation_steps=1, learning_rate=1e-4, 
          lr_warmup_steps=500, save_image_epochs=10, save_model_epochs=30, mixed_precision="no", 
@@ -155,7 +174,6 @@ def main(dataset="butterfly", train_table="/train", image_size=128, train_batch_
         print("Loading butterfly dataset")
         from datasets import load_from_disk
         train_dataset = load_from_disk("common/datasets/smithsonian_butterflies_train")
-        
 
         preprocess = transforms.Compose(
             [
@@ -171,34 +189,32 @@ def main(dataset="butterfly", train_table="/train", image_size=128, train_batch_
 
         train_dataset.set_transform(transform)
     else:
-        train_dataset = HDF5Dataset(dataset, train_table, transform=None)
+        dataset_min = None
+        dataset_max = None
+        dataset_mean = None
+        dataset_std = None
+        # Select transforms for the training dataset
+        train_transform = select_transform(norm_type, image_size, dataset_min, dataset_max, dataset_mean, dataset_std)
 
-        # Get the dataset-level statistics for feature-wise normalization/standardization
-        dataset_min = train_dataset.min_value
-        dataset_max = train_dataset.max_value
-        dataset_mean = train_dataset.mean_value
-        dataset_std = train_dataset.std_value
+        train_datasets = []
+        # Handle train_table argument (single path or list of paths)
+        if isinstance(train_table, str):
+            train_table = [train_table]  # Convert to list if it's a single path
+        for path in train_table:
+            leaf_paths = get_leaf_paths(dataset, path)
+            for leaf_path in leaf_paths:
+                train_ds = HDF5Dataset(dataset, leaf_path, transform=None) 
+                train_ds.set_transform(train_transform)
+                train_datasets.append(train_ds)
 
-        preprocess = None
-        match norm_type:
-            case 0:
-                # Default: Sample-Wise Normalization [-1, 1]
-                preprocess = transforms.Compose([
-                    transforms.Resize((image_size, image_size)),
-                    NormalizeToRange(new_min=-1, new_max=1)  # Normalize sample-wise
-                ])
-            case 1:
-                # Feature-wise normalization to [-1, 1]
-                preprocess = transforms.Compose([
-                    transforms.Resize((image_size, image_size)),
-                    NormalizeToRange(min_value=dataset_min, max_value=dataset_max, new_min=-1, new_max=1)  # Normalize feature-wise
-                ])
-            case _:
-                raise ValueError("Invalid norm_type value. It should be between 0 and 1.")
-        
-        train_dataset.set_transform(preprocess)
+        # Concating all train datasets together.
+        train_dataset = ConcatDataset(train_datasets) if len(train_datasets) > 1 else train_datasets[0]
 
-    train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=train_batch_size, shuffle=True)
+        # If you want to print the total number of samples in all datasets combined
+        total_samples = len(train_dataset)
+        print(f"Total number of samples across all datasets: {total_samples}")
+
+    train_dataloader = DataLoader(train_dataset, batch_size=train_batch_size, shuffle=True)
 
     sample_image = train_dataset[0]
     print("Input shape:", sample_image.shape)
@@ -213,10 +229,10 @@ def main(dataset="butterfly", train_table="/train", image_size=128, train_batch_
         noisy_image_pil.save('noisy_image.png')
         model = huggingface_unet(channels=3)
     else:
-        plt.imshow(noisy_image.squeeze(), aspect='auto', cmap='viridis')
-        plt.axis('off')  # Turn off the axis
-        plt.tight_layout()
-        plt.savefig("noisy_image.png")
+        # plt.imshow(noisy_image.squeeze(), aspect='auto', cmap='viridis')
+        # plt.axis('off')  # Turn off the axis
+        # plt.tight_layout()
+        # plt.savefig("noisy_image.png")
         model = huggingface_unet(channels=1)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
@@ -252,7 +268,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Training configuration.")
     parser.add_argument("dataset", type=str, default="butterfly", help="Dataset name. Or path to the HDF5 dataset file.")
-    parser.add_argument("--train_table", type=str, default="/train", help="Path to the training data table.")
+    parser.add_argument('--train_table', type=str, nargs='+', default='/train', help='HDF5 table name for training data.')
     parser.add_argument("--image_size", type=int, default=128, help="Generated image resolution.")
     parser.add_argument("--train_batch_size", type=int, default=8, help="Batch size for training.")
     parser.add_argument("--eval_batch_size", type=int, default=8, help="Batch size for evaluation.")
