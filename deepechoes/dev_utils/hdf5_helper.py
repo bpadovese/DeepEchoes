@@ -101,7 +101,7 @@ def create_or_get_table(h5file, path, table_name, table_description):
     
     # Create or get the table within the final group
     if not hasattr(group, table_name):
-        table = h5file.create_table(group, table_name, table_description, f"{table_name} Data", filters=filters, chunkshape=(5,))
+        table = h5file.create_table(group, table_name, table_description, title=f"{table_name} Data", filters=filters, chunkshape=(5,))
     else:
         table = getattr(group, table_name)
     

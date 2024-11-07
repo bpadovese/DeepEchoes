@@ -49,11 +49,6 @@ def file_duration_table(path, num=None, exclude_subdir=None):
         Args:
             path: str
                 Path to folder with audio files (\*.wav)
-            datetime_format: str
-                String defining the date-time format. 
-                Example: %d_%m_%Y* would capture "14_3_1999.txt".
-                See https://pypi.org/project/datetime-glob/ for a list of valid directives.
-                If specified, the method will attempt to parse the datetime information from the filename.
             num: int
                 Randomly sample a number of files
             exclude_subdir: str
