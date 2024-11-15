@@ -25,9 +25,6 @@ def load_audio(path, start=None, end=None, new_sr=None, pad='reflect'):
         np.ndarray: The loaded audio segment.
         int: The sample rate of the loaded audio.
     """
-    # ToDo: add an option of 'adjust' that will
-
-
     # Open the file to get the sample rate and total frames
     
     with sf.SoundFile(path) as file:

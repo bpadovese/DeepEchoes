@@ -5,6 +5,7 @@ from deepechoes.dev_utils.hdf5_helper import insert_spectrogram_data, create_or_
 import tables as tb
 import matplotlib.pyplot as plt
 import math
+import torch
 
 def single_spec_gen():
     # Load the diffusion model
@@ -71,6 +72,11 @@ def multiple_spec_gen(model_path, num_samples, output_path='.', batch_size=8, nu
 
 
 def diffusion_generate_to_hdf5(model_path, num_samples, output_path='diffusion.h5', table_name='/train', label=1, batch_size=8, num_inference_steps=1000):
+    if torch.cuda.is_available():
+        print("CUDA is available, using GPU.")
+    else:
+        print("CUDA is not available, using CPU.")
+    
     if output_path is None:
         output_path = Path('.').resolve()
     else:
