@@ -95,10 +95,12 @@ def create_db(data_dir, audio_representation, annotations=None, annotation_step=
             with open(random_selections[2], 'r') as file:
                 filenames = file.read().splitlines()
             files = files[files['filename'].isin(filenames)]
+        # print(files)
         
         # Generate random segments based on the file durations and label
         rando = create_random_segments(files, config['duration'], num_segments, label=random_selections[1], annotations=annots)
-
+        # print(rando)
+        
         if labels is None:
             labels = []
             
@@ -109,6 +111,7 @@ def create_db(data_dir, audio_representation, annotations=None, annotation_step=
             # if the random selections label did not yet exist in the selections, add it to the list of labels
             labels.append(random_selections[1])
             selections[random_selections[1]] = rando
+        # print(selections)
 
     if output is None:
         output = os.path.join('db', 'narw_db.h5')

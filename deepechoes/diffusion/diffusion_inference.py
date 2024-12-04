@@ -7,21 +7,25 @@ import matplotlib.pyplot as plt
 import math
 import torch
 
-def single_spec_gen():
-    # Load the diffusion model
-    generator = DiffusionPipeline.from_pretrained("trained_models/diffusion/accelerate").to("cuda")
+def save_specs_individually(images, output_path, prefix="spec"):
+    """
+    Save spectrograms as individual images.
 
-    # Generate an image
-    image = generator(output_type="nd.array", num_inference_steps=1000).images[0]
+    Parameters:
+    - images: numpy array of spectrograms
+    - output_path: Path object or string, directory to save the spectrograms
+    - prefix: Optional prefix for filenames
+    """
+    output_path = Path(output_path)
+    output_path.mkdir(parents=True, exist_ok=True)
 
-    # Plot and save the spectrogram
-    fig, ax = plt.subplots()
-    ax.imshow(image[:, :, 0], aspect='auto', origin='lower', cmap='viridis')
-    ax.axis('off')  # Turn off the axis
+    for i, image in enumerate(images):
+        fig, ax = plt.subplots(figsize=(5, 5))
+        ax.imshow(image[:, :, 0], aspect='auto', origin='lower', cmap='viridis')
+        ax.axis('off')  # Turn off the axis
+        fig.savefig(output_path / f"{prefix}_{i}.png", bbox_inches='tight')
+        plt.close(fig)  # Close the figure to save memory
 
-    # Save the figure
-    fig.savefig('spectrogram_image.png', bbox_inches='tight', pad_inches=0)
-    plt.close(fig)  # Close the figure to free up memory
 
 def make_grid_spec(images, cols):
     print(images.shape)
@@ -46,7 +50,7 @@ def make_grid_spec(images, cols):
     plt.tight_layout()
     return fig
 
-def multiple_spec_gen(model_path, num_samples, output_path='.', batch_size=8, num_inference_steps=1000):
+def multiple_spec_gen(model_path, num_samples, output_path='.', batch_size=8, num_inference_steps=1000, mode='grid'):
     if output_path is None:
         output_path = Path('.').resolve()
     else:
@@ -66,9 +70,16 @@ def multiple_spec_gen(model_path, num_samples, output_path='.', batch_size=8, nu
         
         # Generate an image
         images = generator(batch_size=batch_size_adjusted, output_type="nd.array", num_inference_steps=num_inference_steps).images
-        spec_grid = make_grid_spec(images, cols=4)
-        # Save the figure
-        spec_grid.savefig(output_path / f'{str(batch_num)}.png', bbox_inches='tight')
+        
+        if mode == 'grid':
+            spec_grid = make_grid_spec(images, cols=4)
+            # Save the figure
+            spec_grid.savefig(output_path / f'{str(batch_num)}.png', bbox_inches='tight')
+        else:
+            # Save spectrograms one by one
+            save_specs_individually(images, output_path=output_path, prefix=f'batch_{batch_num}')
+
+        
 
 
 def diffusion_generate_to_hdf5(model_path, num_samples, output_path='diffusion.h5', table_name='/train', label=1, batch_size=8, num_inference_steps=1000):
@@ -129,7 +140,7 @@ def main():
     if mode == 'hdf5':
         diffusion_generate_to_hdf5(args.model_path, args.num_samples, args.output_path, args.table_name, args.label, args.batch_size, args.num_inference_steps)
     else:
-        multiple_spec_gen(args.model_path, args.num_samples, args.output_path, args.batch_size, args.num_inference_steps)
+        multiple_spec_gen(args.model_path, args.num_samples, args.output_path, args.batch_size, args.num_inference_steps, args.mode)
 
 if __name__ == "__main__":
     main()
