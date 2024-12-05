@@ -46,7 +46,7 @@ class HDF5Dataset(Dataset):
         if self.transform:
             spectrogram = self.transform(spectrogram)
 
-        return spectrogram
+        return spectrogram, torch.tensor(label, dtype=torch.long)
 
     def __del__(self):
         self.file.close()

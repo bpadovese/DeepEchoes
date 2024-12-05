@@ -4,6 +4,7 @@ import tables as tb
 import pandas as pd
 import json
 import librosa
+import random
 from tqdm import tqdm
 from scipy.signal import butter, sosfilt
 from pathlib import Path
@@ -19,13 +20,15 @@ def high_pass_filter(sig, rate, order=10, freq=400):
 
     return filtered_signal
 
-def create_db(data_dir, audio_representation, annotations=None, annotation_step=0, step_min_overlap=0.5, labels=None, 
+def create_db(data_dir, audio_representation, mode='hdf5', annotations=None, annotation_step=0, step_min_overlap=0.5, labels=None, 
               output=None, table_name=None, random_selections=None, avoid_annotations=None, overwrite=False, seed=None, 
               n_samples=None, only_augmented=False):
     
+    print(seed)
     # Initialize random seed for reproducibility
     if seed is not None:
         np.random.seed(seed)
+        random.seed(seed)
 
     # Raise an exception if both annotations and random_selections are None
     if random_selections is None and annotations is None:
@@ -52,7 +55,7 @@ def create_db(data_dir, audio_representation, annotations=None, annotation_step=
         if 'start' in annots.columns and 'end' in annots.columns:
             for label in labels:
                 # Define segments for the given label based on annotation data
-                selections[label] = define_segments(annots, duration=config['duration'], center=False)
+                selections[label] = define_segments(annots, duration=config['duration'], center=True)
 
                 # If annotation_step is set, create time-shifted instances
                 if annotation_step > 0:
@@ -95,7 +98,6 @@ def create_db(data_dir, audio_representation, annotations=None, annotation_step=
             with open(random_selections[2], 'r') as file:
                 filenames = file.read().splitlines()
             files = files[files['filename'].isin(filenames)]
-        # print(files)
         
         # Generate random segments based on the file durations and label
         rando = create_random_segments(files, config['duration'], num_segments, label=random_selections[1], annotations=annots)
@@ -111,88 +113,126 @@ def create_db(data_dir, audio_representation, annotations=None, annotation_step=
             # if the random selections label did not yet exist in the selections, add it to the list of labels
             labels.append(random_selections[1])
             selections[random_selections[1]] = rando
-        # print(selections)
 
     if output is None:
-        output = os.path.join('db', 'narw_db.h5')
+        output = os.path.join('db', 'db.h5') if mode == 'hdf5' else os.path.join('images', 'narw_images')
 
     if not os.path.isabs(output): 
         output = os.path.join(os.getcwd(), output)
     Path(os.path.dirname(output)).mkdir(parents=True, exist_ok=True) #creating dir if it doesnt exist
 
-    if overwrite and os.path.exists(output): 
+    if overwrite and os.path.exists(output) and mode == 'hdf5': 
         os.remove(output)
 
-    print('\nCreating db...')
-    with tb.open_file(output, mode='a') as h5file:
-        # Load the first sample to determine the table shape
-        first_key = labels[0]
-        y, sr = load_audio(path=Path(data_dir) / selections[first_key].iloc[0]['filename'], start=0, end=config['duration'], new_sr=config['sr'])
-        sp = classifier_representation(y, config["window"], config["step"], sr, config["num_filters"], fmin=config["fmin"], fmax=config["fmax"]).shape
-        table = create_or_get_table(h5file, table_name, 'data', create_table_description(sp))
-        
-        # Initialize global min, max, sum, and sum of squares for normalization
-        global_min = float('inf')
-        global_max = float('-inf')
-        global_sum = 0
-        global_sum_of_squares = 0
-        total_samples = 0
+    if mode == 'hdf5':
+        print('\nCreating HDF5 db...')
+        with tb.open_file(output, mode='a') as h5file:
+            # Load the first sample to determine the table shape
+            first_key = labels[0]
+            y, sr = load_audio(path=Path(data_dir) / selections[first_key].iloc[0]['filename'], start=0, end=config['duration'], new_sr=config['sr'])
+            sp = classifier_representation(y, config["window"], config["step"], sr, config["num_filters"], fmin=config["fmin"], fmax=config["fmax"]).shape
+            table = create_or_get_table(h5file, table_name, 'data', create_table_description(sp))
+            
+            # Initialize global min, max, sum, and sum of squares for normalization
+            global_min = float('inf')
+            global_max = float('-inf')
+            global_sum = 0
+            global_sum_of_squares = 0
+            total_samples = 0
 
-        # Loop through each label and add its data to the table
+            # Loop through each label and add its data to the table
+            for label in labels:
+                print(f'\nAdding data with label {label} to table {table_name} with shape {sp}...')
+                selections_label = selections[label]
+                
+                # If n_samples is specified, randomly sample from the selections
+                if n_samples is not None:
+                    selections_label = selections_label.sample(n=n_samples)  
+
+                for _, row in tqdm(selections_label.iterrows(), total=selections_label.shape[0]):
+                    start = 0
+                    if 'start' in row.index:
+                        start = row['start']
+
+                    file_path = os.path.join(data_dir, row['filename'])
+                    
+                    file_duration = librosa.get_duration(path=file_path)
+                    if start >= file_duration: # I know this check is bizarre. but because we have some very long annotations that span two files, sometimes, when using a small duration window, and trying to centralize this window, it may end up entirely in the second file. I then adjust to try to at least span 2 files. Very rare.
+                        start = file_duration - config['duration'] / 2 # the following two lines set the duration of the segment to be between two files
+                    end = start + config['duration']
+
+                    # Load audio segment and create its representation
+                    y, sr = load_audio(path=file_path, start=start, end=end, new_sr=config['sr'])
+                    representation_data = classifier_representation(y, config["window"], config["step"], sr, config["num_filters"], fmin=config["fmin"], fmax=config["fmax"])
+
+                    # Update global min and max
+                    current_min = representation_data.min()
+                    current_max = representation_data.max()
+                    if current_min < global_min:
+                        global_min = current_min
+                    if current_max > global_max:
+                        global_max = current_max
+                    
+                    # Update global sum and sum of squares
+                    global_sum += representation_data.sum()
+                    global_sum_of_squares += np.square(representation_data).sum()
+                    total_samples += np.prod(representation_data.shape)
+
+                    # Insert spectrogram data into the table
+                    insert_spectrogram_data(table, row['filename'], start, label, representation_data)
+            
+            # Calculate mean and standard deviation
+            global_mean = global_sum / total_samples
+            global_variance = (global_sum_of_squares / total_samples) - (global_mean ** 2)
+            global_std = np.sqrt(global_variance)
+
+            # Store dataset attributes in the table (min, max, mean, std)
+            attributes = {
+                "min_value": global_min,
+                "max_value": global_max,
+                "mean_value": global_mean,
+                "std_value": global_std
+            }
+
+            save_dataset_attributes(table, attributes)
+    elif mode == 'img':
+        print('\nSaving spectrograms as images...')
         for label in labels:
-            print(f'\nAdding data with label {label} to table {table_name} with shape {sp}...')
+            print(f'\nProcessing label {label}...')
             selections_label = selections[label]
             
-            # If n_samples is specified, randomly sample from the selections
             if n_samples is not None:
-                selections_label = selections_label.sample(n=n_samples)  
+                selections_label = selections_label.sample(n=n_samples)
 
+            label_dir = os.path.join(output, str(label))
+            os.makedirs(label_dir, exist_ok=True)
+            file_image_counts = {}
             for _, row in tqdm(selections_label.iterrows(), total=selections_label.shape[0]):
-                start = 0
-                if 'start' in row.index:
-                    start = row['start']
-
+                start = row.get('start', 0)
                 file_path = os.path.join(data_dir, row['filename'])
-                
                 file_duration = librosa.get_duration(path=file_path)
-                if start >= file_duration: # I know this check is bizarre. but because we have some very long annotations that span two files, sometimes, when using a small duration window, and trying to centralize this window, it may end up entirely in the second file. I then adjust to try to at least span 2 files. Very rare.
-                    start = file_duration - config['duration'] / 2 # the following two lines set the duration of the segment to be between two files
+                if start >= file_duration:
+                    start = file_duration - config['duration'] / 2
                 end = start + config['duration']
 
-                # Load audio segment and create its representation
                 y, sr = load_audio(path=file_path, start=start, end=end, new_sr=config['sr'])
-                representation_data = classifier_representation(y, config["window"], config["step"], sr, config["num_filters"], fmin=config["fmin"], fmax=config["fmax"])
-
-                # Update global min and max
-                current_min = representation_data.min()
-                current_max = representation_data.max()
-                if current_min < global_min:
-                    global_min = current_min
-                if current_max > global_max:
-                    global_max = current_max
+                spectrogram_image = classifier_representation(y, config["window"], config["step"], sr, config["num_filters"], 
+                                                              fmin=config["fmin"], fmax=config["fmax"], mode='img')
                 
-                # Update global sum and sum of squares
-                global_sum += representation_data.sum()
-                global_sum_of_squares += np.square(representation_data).sum()
-                total_samples += np.prod(representation_data.shape)
-
-                # Insert spectrogram data into the table
-                insert_spectrogram_data(table, row['filename'], start, label, representation_data)
-        
-        # Calculate mean and standard deviation
-        global_mean = global_sum / total_samples
-        global_variance = (global_sum_of_squares / total_samples) - (global_mean ** 2)
-        global_std = np.sqrt(global_variance)
-
-        # Store dataset attributes in the table (min, max, mean, std)
-        attributes = {
-            "min_value": global_min,
-            "max_value": global_max,
-            "mean_value": global_mean,
-            "std_value": global_std
-        }
-
-        save_dataset_attributes(table, attributes)
+                # output_path = os.path.join(label_dir, f"{row['filename'].split('.')[0]}_{start:.2f}_{end:.2f}.png")
+                        # Get the base filename without directories or extensions
+                base_filename = os.path.basename(row['filename']).split('.')[0]
+                
+                # Update the index for this file
+                        # Initialize the index for this file if it doesn't exist
+                if base_filename not in file_image_counts:
+                    file_image_counts[base_filename] = 1  # Start index at 1
+                else:
+                    file_image_counts[base_filename] += 1  # Increment the count for each subsequent image
+                # Use the index as part of the filename
+                idx = file_image_counts[base_filename]
+                output_path = os.path.join(label_dir, f"{base_filename}_{idx}.png")
+                spectrogram_image.save(output_path)
 
 def main():
     import argparse
@@ -225,6 +265,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('data_dir', type=str, help='Path to the directory containing the audio files')
     parser.add_argument('audio_representation', type=str, help='Path to the audio representation config file')
+    parser.add_argument('--mode', default='hdf5', type=str, help='hdf5 or img')
     parser.add_argument('--annotations', default=None, type=str, help='Path to the annotations .csv')
     parser.add_argument('--annotation_step', default=0, type=float, help='Produce multiple time shifted representations views for each annotated  section by shifting the annotation  \
                 window in steps of length step (in seconds) both forward and backward in time. The default value is 0.')
@@ -245,6 +286,7 @@ def main():
     create_db(
         data_dir=args.data_dir,
         audio_representation=args.audio_representation,
+        mode=args.mode,
         annotations=args.annotations,
         annotation_step=args.annotation_step,
         step_min_overlap=args.step_min_overlap,

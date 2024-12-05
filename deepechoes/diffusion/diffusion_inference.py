@@ -1,4 +1,5 @@
 from diffusers import DiffusionPipeline
+from diffusers import DDIMScheduler, DDPMScheduler
 from pathlib import Path
 from tqdm import tqdm
 from deepechoes.dev_utils.hdf5_helper import insert_spectrogram_data, create_or_get_table, create_table_description
@@ -97,6 +98,11 @@ def diffusion_generate_to_hdf5(model_path, num_samples, output_path='diffusion.h
     
     # Load the diffusion model
     generator = DiffusionPipeline.from_pretrained(model_path).to("cuda")
+    print(generator.scheduler)
+    # Replace the scheduler with DDIMScheduler
+    generator.scheduler = DDIMScheduler.from_config(generator.scheduler.config)
+
+    print(generator.scheduler)
     generator.set_progress_bar_config(disable=True)
 
     print('\nCreating db...')
