@@ -1,55 +1,14 @@
 import numpy as np
 import librosa
-import skimage
 from PIL import Image
-from deepechoes.dev_utils.image_transforms import scale_to_range, normalize_to_zero_mean_unit_variance
-from deepechoes.constants import IMG_HEIGHT, IMG_WIDTH
-from deepechoes.dev_utils.spec_to_wav import spec_to_wav
 
-def invertible_representation(y, window, step, sr, n_mels, fmin=0, fmax=8000):
+def classifier_representation(y, window, step, sr, n_mels, fmin=0, fmax=12000, ref=np.max, top_db=80, mode='hdf5'):
     # Converting windows size and step size to nfft and hop length (in frames) because librosa uses that.
-    n_fft = int(window * sr)  # Window size 
+    n_fft = int(window * sr)  # Window size
     hop_length = int(step * sr)  # Step size
-    # n_fft = 800
-    # hop_length = int(n_fft * 0.31)  
-    # S = librosa.feature.melspectrogram(y=y, sr=sr, n_fft=n_fft, hop_length=hop_length, window="hann", n_mels=n_mels, fmin=fmin)
+    n_fft = 1024
+    hop_length = 187
     S = librosa.feature.melspectrogram(y=y, sr=sr, n_fft=n_fft, hop_length=hop_length, window="hann", n_mels=n_mels, fmin=fmin, fmax=fmax)
-    # representation_data = librosa.power_to_db(S, ref=np.max)
-    S = S[:, 1:-1]
-    representation_data = librosa.power_to_db(S, ref=1.0, top_db=80.0)
-    # Remove one column from the beginning and one column from the end
-    
-    # Normalize each frequency bin to have zero mean and unit variance
-    # representation_data = normalize_to_zero_mean_unit_variance(representation_data, clip_std=True)
-    # waveform = spec_to_wav(representation_data, n_fft, hop_length, sr)
-    
-    # max_amplitude = np.max(np.abs(waveform))
-    # if max_amplitude > 0:
-    #     waveform /= max_amplitude
-
-    # Rescale to [-1, 1]
-    # representation_data = scale_to_range(representation_data, -1, 1)
-    # representation_data = np.clip(representation_data, -1, 1)
-    return representation_data
-
-def augmentation_representation_snapshot(y, window, step, sr, n_mels, fmin=400, fmax=12000):
-    # Converting windows size and step size to nfft and hop length (in frames) because librosa uses that.
-    n_fft = int(window * sr)  # Window size
-    hop_length = int(step * sr)  # Step size
-    S = librosa.feature.melspectrogram(y=y, sr=sr, n_fft=n_fft, hop_length=hop_length, window="hamming", n_mels=n_mels, fmin=fmin, fmax=fmax)
-    spec = librosa.power_to_db(S, ref=np.max)
-    print(spec.shape)
-    
-    representation_data = skimage.transform.resize(spec, (IMG_HEIGHT,IMG_WIDTH))
-    representation_data = scale_to_range(representation_data, -1, 1)
-
-    return representation_data
-
-def classifier_representation(y, window, step, sr, n_mels, fmin=400, fmax=12000, ref=np.max, top_db=80, mode='hdf5'):
-    # Converting windows size and step size to nfft and hop length (in frames) because librosa uses that.
-    n_fft = int(window * sr)  # Window size
-    hop_length = int(step * sr)  # Step size
-    S = librosa.feature.melspectrogram(y=y, sr=sr, n_fft=n_fft, hop_length=hop_length, window="hamming", n_mels=n_mels, fmin=fmin, fmax=fmax)
     # spec = librosa.power_to_db(S, ref=1.0, top_db=80.0)
     spec = librosa.power_to_db(S, ref=ref, top_db=80.0)
 
@@ -58,3 +17,20 @@ def classifier_representation(y, window, step, sr, n_mels, fmin=400, fmax=12000,
         spec = Image.fromarray(bytedata)
 
     return spec
+
+def image_to_audio(self, image: Image.Image) -> np.ndarray:
+    """Converts spectrogram to audio.
+
+    Args:
+        image (`PIL Image`): x_res x y_res grayscale image
+
+    Returns:
+        audio (`np.ndarray`): raw audio
+    """
+    bytedata = np.frombuffer(image.tobytes(), dtype="uint8").reshape((image.height, image.width))
+    log_S = bytedata.astype("float") * self.top_db / 255 - self.top_db
+    S = librosa.db_to_power(log_S)
+    audio = librosa.feature.inverse.mel_to_audio(
+        S, sr=self.sr, n_fft=self.n_fft, hop_length=self.hop_length, n_iter=self.n_iter
+    )
+    return audio

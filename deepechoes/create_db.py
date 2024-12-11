@@ -8,10 +8,10 @@ import random
 from tqdm import tqdm
 from scipy.signal import butter, sosfilt
 from pathlib import Path
-from deepechoes.dev_utils.audio_processing import load_audio
+from deepechoes.dev_utils.audio_processing import load_segment
 from deepechoes.dev_utils.annotation_processing import standardize, define_segments, generate_time_shifted_instances, create_random_segments
 from deepechoes.dev_utils.hdf5_helper import create_table_description, insert_spectrogram_data, create_or_get_table, save_dataset_attributes
-from deepechoes.dev_utils.spec_preprocessing import invertible_representation, augmentation_representation_snapshot, classifier_representation
+from deepechoes.dev_utils.spec_preprocessing import classifier_representation
 from deepechoes.dev_utils.file_management import file_duration_table
 
 def high_pass_filter(sig, rate, order=10, freq=400):
@@ -129,7 +129,7 @@ def create_db(data_dir, audio_representation, mode='hdf5', annotations=None, ann
         with tb.open_file(output, mode='a') as h5file:
             # Load the first sample to determine the table shape
             first_key = labels[0]
-            y, sr = load_audio(path=Path(data_dir) / selections[first_key].iloc[0]['filename'], start=0, end=config['duration'], new_sr=config['sr'])
+            y, sr = load_segment(path=Path(data_dir) / selections[first_key].iloc[0]['filename'], start=0, end=config['duration'], new_sr=config['sr'])
             sp = classifier_representation(y, config["window"], config["step"], sr, config["num_filters"], fmin=config["fmin"], fmax=config["fmax"]).shape
             table = create_or_get_table(h5file, table_name, 'data', create_table_description(sp))
             
@@ -162,7 +162,7 @@ def create_db(data_dir, audio_representation, mode='hdf5', annotations=None, ann
                     end = start + config['duration']
 
                     # Load audio segment and create its representation
-                    y, sr = load_audio(path=file_path, start=start, end=end, new_sr=config['sr'])
+                    y, sr = load_segment(path=file_path, start=start, end=end, new_sr=config['sr'])
                     representation_data = classifier_representation(y, config["window"], config["step"], sr, config["num_filters"], fmin=config["fmin"], fmax=config["fmax"])
 
                     # Update global min and max
@@ -215,7 +215,7 @@ def create_db(data_dir, audio_representation, mode='hdf5', annotations=None, ann
                     start = file_duration - config['duration'] / 2
                 end = start + config['duration']
 
-                y, sr = load_audio(path=file_path, start=start, end=end, new_sr=config['sr'])
+                y, sr = load_segment(path=file_path, start=start, end=end, new_sr=config['sr'])
                 spectrogram_image = classifier_representation(y, config["window"], config["step"], sr, config["num_filters"], 
                                                               fmin=config["fmin"], fmax=config["fmax"], mode='img')
                 

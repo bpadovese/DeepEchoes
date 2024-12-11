@@ -51,60 +51,33 @@ def make_grid_spec(images, cols):
     plt.tight_layout()
     return fig
 
-def multiple_spec_gen(model_path, num_samples, output_path='.', batch_size=8, num_inference_steps=1000, mode='grid'):
-    if output_path is None:
-        output_path = Path('.').resolve()
-    else:
-        output_path = Path(output_path).resolve()
-
-    output_path.mkdir(parents=True, exist_ok=True)
-
-    # Load the diffusion model
-    generator = DiffusionPipeline.from_pretrained(model_path).to("cuda")
-    generator.set_progress_bar_config(disable=True)
-
-    
-    
+def to_img(pipeline, num_samples, output_path='./dataset', batch_size=8, num_inference_steps=1000, display=None):
     num_batches = (num_samples + batch_size - 1) // batch_size 
     for batch_num in tqdm(range(num_batches)):
         batch_size_adjusted = min(batch_size, num_samples - batch_num * batch_size) # calculate the batch size for the current batch (will be different for the last batch)
         
         # Generate an image
-        images = generator(batch_size=batch_size_adjusted, output_type="nd.array", num_inference_steps=num_inference_steps).images
+        images = pipeline(
+            batch_size=batch_size_adjusted, 
+            generator=None,
+            num_inference_steps=num_inference_steps,
+            return_dict=False
+            )[0]
         
-        if mode == 'grid':
+        if display:
             spec_grid = make_grid_spec(images, cols=4)
             # Save the figure
             spec_grid.savefig(output_path / f'{str(batch_num)}.png', bbox_inches='tight')
         else:
             # Save spectrograms one by one
-            save_specs_individually(images, output_path=output_path, prefix=f'batch_{batch_num}')
+            for i, image in enumerate(images):  # `images` is a list of PIL.Image objects
+                idx = batch_num * batch_size + i
+                image.save(output_path / f"diffusion_{idx}.png")
+            
+            # save_specs_individually(images, output_path=output_path, prefix=f'batch_{batch_num}')
 
-        
-
-
-def diffusion_generate_to_hdf5(model_path, num_samples, output_path='diffusion.h5', table_name='/train', label=1, batch_size=8, num_inference_steps=1000):
-    if torch.cuda.is_available():
-        print("CUDA is available, using GPU.")
-    else:
-        print("CUDA is not available, using CPU.")
+def to_hdf5(pipeline, num_samples, output_path='diffusion.h5', table_name='/train', label=1, batch_size=8, num_inference_steps=1000):
     
-    if output_path is None:
-        output_path = Path('.').resolve()
-    else:
-        output_path = Path(output_path).resolve()
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    # Load the diffusion model
-    generator = DiffusionPipeline.from_pretrained(model_path).to("cuda")
-    print(generator.scheduler)
-    # Replace the scheduler with DDIMScheduler
-    generator.scheduler = DDIMScheduler.from_config(generator.scheduler.config)
-
-    print(generator.scheduler)
-    generator.set_progress_bar_config(disable=True)
-
     print('\nCreating db...')
     with tb.open_file(output_path, mode='a') as h5file:
         table = create_or_get_table(h5file, table_name, 'data', create_table_description((128,128)))
@@ -113,7 +86,7 @@ def diffusion_generate_to_hdf5(model_path, num_samples, output_path='diffusion.h
         for batch_num in tqdm(range(num_batches)):
             batch_size_adjusted = min(batch_size, num_samples - batch_num * batch_size) # calculate the batch size for the current batch (will be different for the last batch)
             # Generate the images
-            images = generator(batch_size=batch_size_adjusted, output_type="nd.array", num_inference_steps=num_inference_steps).images
+            images = pipeline(batch_size=batch_size_adjusted, output_type="nd.array", num_inference_steps=num_inference_steps).images
 
             for i, representation_data in enumerate(images):
                 idx = batch_num * batch_size + i
@@ -125,6 +98,39 @@ def diffusion_generate_to_hdf5(model_path, num_samples, output_path='diffusion.h
                 
                 insert_spectrogram_data(table, filename, 0, label, representation_data)
 
+def diffusion_inference(model_path, mode, num_samples, output_path='diffusion.h5', table_name='/train', label=1, batch_size=8, num_inference_steps=1000):
+    if torch.cuda.is_available():
+        print("CUDA is available, using GPU.")
+    else:
+        print("CUDA is not available, using CPU.")
+    
+    if output_path is None:
+        output_path = Path('.').resolve()
+    else:
+        output_path = Path(output_path).resolve()
+
+    output_path.mkdir(parents=True, exist_ok=True)
+    
+    # Load the diffusion model
+    pipeline = DiffusionPipeline.from_pretrained(model_path).to("cuda")
+    # print(pipeline.scheduler)
+    # Replace the scheduler with DDIMScheduler
+    # generator.scheduler = DDIMScheduler.from_config(generator.scheduler.config)
+
+    # print(pipeline.scheduler)
+    pipeline.set_progress_bar_config(disable=True)
+
+    if mode == 'hdf5':
+        to_hdf5(pipeline, num_samples, output_path, table_name, label, batch_size, num_inference_steps)
+    else:
+        to_img(
+            pipeline, 
+            num_samples, 
+            output_path=output_path, 
+            batch_size=batch_size, 
+            num_inference_steps=num_inference_steps
+            )
+
 def main():
     import argparse
 
@@ -132,7 +138,7 @@ def main():
     parser = argparse.ArgumentParser()
     
     parser.add_argument('model_path', type=str, help='Path to where the generator is saved')
-    parser.add_argument('--mode', type=str, default='hdf5', help='mode to either save to a hdf5 db or plot, or saves 1 image to a "csv"')
+    parser.add_argument('--mode', type=str, choices=['hdf5', 'img'], default='img', help="Specify dataset mode: 'img' to generate images, 'hdf5' for tos tore in HDF5 datasets.")
     parser.add_argument('--num_samples', default=10, type=int, help="How many samples to generate.")
     parser.add_argument('--output_path', default=None, type=str, help='Output Path')
     parser.add_argument('--table_name', default='/train', type=str, help="Table name within the database where the data will be stored. Must start with a foward slash. For instance '/train'")
@@ -141,12 +147,8 @@ def main():
     parser.add_argument('--num_inference_steps', default=1000, type=int, help="Number of denoising steps during the reverse-diffusion step.")
 
     args = parser.parse_args()
-    mode = args.mode
 
-    if mode == 'hdf5':
-        diffusion_generate_to_hdf5(args.model_path, args.num_samples, args.output_path, args.table_name, args.label, args.batch_size, args.num_inference_steps)
-    else:
-        multiple_spec_gen(args.model_path, args.num_samples, args.output_path, args.batch_size, args.num_inference_steps, args.mode)
+    diffusion_inference(args.model_path, args.mode, args.num_samples, output_path=args.output_path, table_name=args.table_name, label=args.label, batch_size=args.batch_size, num_inference_steps=args.num_inference_steps)
 
 if __name__ == "__main__":
     main()

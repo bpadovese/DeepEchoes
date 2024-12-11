@@ -71,7 +71,7 @@ def evaluate(config, epoch, pipeline, generator):
         #         for image in images
         #     ]
         # )
-        for idx, image in enumerate(images):  # Assuming `images` is a list of PIL.Image objects
+        for idx, image in enumerate(images):  # `images` is a list of PIL.Image objects
             image.save(os.path.join(test_dir, f"image_epoch{epoch}_sample{idx}.png"))
 
         # image_grid = make_grid(images, rows=4, cols=4)
@@ -179,19 +179,13 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
 
     accelerator.end_training()
 
-def select_transform(norm_type, image_size, dataset_min=None, dataset_max=None, dataset_mean=None, dataset_std=None):
+def select_transform(norm_type, image_size):
     match norm_type:
         case 0:
             # Default: Sample-Wise Normalization [-1, 1]
             return transforms.Compose([
                 transforms.Resize((image_size, image_size)),
                 NormalizeToRange(new_min=-1, new_max=1)  # Normalize sample-wise
-            ])
-        case 1:
-            # Feature-wise normalization to [-1, 1]
-            return transforms.Compose([
-                transforms.Resize((image_size, image_size)),
-                NormalizeToRange(min_value=dataset_min, max_value=dataset_max, new_min=-1, new_max=1)  # Normalize feature-wise
             ])
         case 2:
             return transforms.Compose([
@@ -218,12 +212,8 @@ def main(dataset, mode='img', train_table="/train", image_size=128, train_batch_
         # Load images from the folder
         train_dataset = ImageFolder(root=dataset, transform=train_transform, loader=lambda path: Image.open(path))
     else:
-        dataset_min = None
-        dataset_max = None
-        dataset_mean = None
-        dataset_std = None
         # Select transforms for the training dataset
-        train_transform = select_transform(norm_type, image_size, dataset_min, dataset_max, dataset_mean, dataset_std)
+        train_transform = select_transform(norm_type, image_size)
 
         train_datasets = []
         # Handle train_table argument (single path or list of paths)
@@ -281,7 +271,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Training configuration.")
     parser.add_argument("dataset", type=str, default="img", help="Path to the HDF5 dataset file or image folder.")
-    parser.add_argument("--mode", type=str, default="img", help="img or hdf5")
+    parser.add_argument('--mode', type=str, choices=['hdf5', 'img'], default='img', help="Specify dataset mode: 'img' to generate images, 'hdf5' for tos tore in HDF5 datasets.")
     parser.add_argument('--train_table', type=str, nargs='+', default='/train', help='HDF5 table name for training data.')
     parser.add_argument("--image_size", type=int, default=128, help="Generated image resolution.")
     parser.add_argument("--train_batch_size", type=int, default=8, help="Batch size for training.")
@@ -299,7 +289,6 @@ if __name__ == "__main__":
     parser.add_argument('--norm_type', type=int, default=0, help=(
         'Type of normalization/standardization to apply. Default is 0. Options are:\n'
         '0 - Normalize each sample individually to the range [-1, 1].\n'
-        '1 - Normalize across the entire dataset to the range [-1, 1].\n'
     ))
     parser.add_argument("--seed", type=int, default=None, help="Random seed.")
     

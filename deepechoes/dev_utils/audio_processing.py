@@ -2,7 +2,7 @@ import numpy as np
 import soundfile as sf
 import librosa
 
-def load_audio(path, start=None, end=None, new_sr=None, pad='reflect'):
+def load_segment(path, start=None, end=None, new_sr=None, pad='reflect'):
     """
     Loads an audio segment with optional padding.
 
@@ -13,9 +13,6 @@ def load_audio(path, start=None, end=None, new_sr=None, pad='reflect'):
         new_sr (int): If provided, resample the audio to this sample rate.
         pad (str): Padding option to apply if the requested segment extends beyond the audio file.
                    Options:
-                   - None: No padding is applied. If the requested start or end time 
-                     exceeds the file duration, the start and end times are adjusted to fit within 
-                     the file's bounds.
                    - 'zero': Pads the beginning and/or end of the audio with zeros if the start or 
                      end time is outside the file's duration.
                    - 'reflect' (default): Pads the beginning and/or end of the audio with a reflected version 
@@ -42,16 +39,10 @@ def load_audio(path, start=None, end=None, new_sr=None, pad='reflect'):
         if start is not None and start < 0:
             pad_start = -start  # Calculate how much to pad at the beginning
             start = 0
-            if pad is None:
-                if end is None:
-                    end = 0
-                end += pad_start
 
         # Ensure end time does not exceed the file's duration
         if end is not None and end > file_duration:
             pad_end = end - file_duration  # Calculate how much to pad at the end
-            if pad is None:
-                start = max(start - (end - file_duration), 0)
             end = file_duration
 
         # Convert start and end times to frame indices
@@ -63,7 +54,7 @@ def load_audio(path, start=None, end=None, new_sr=None, pad='reflect'):
         audio_segment = file.read(end_frame - start_frame)
 
     # Apply padding if necessary
-    if pad is not None and (pad_start > 0 or pad_end > 0):
+    if (pad_start > 0 or pad_end > 0):
         # Calculate padding in frames
         pad_start_frames = int(pad_start * sr)
         pad_end_frames = int(pad_end * sr)
