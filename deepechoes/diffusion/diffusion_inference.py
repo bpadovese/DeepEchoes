@@ -118,11 +118,11 @@ def diffusion_inference(model_path, mode, num_samples, output_path='diffusion.h5
     
     # Load the diffusion model
     pipeline = DiffusionPipeline.from_pretrained(model_path).to("cuda")
-    print(pipeline.scheduler)
+    # print(pipeline.scheduler)
     # Replace the scheduler with DDIMScheduler
-    # pipeline.scheduler = DDIMScheduler.from_config(pipeline.scheduler.config)
+    pipeline.scheduler = DDIMScheduler.from_config(pipeline.scheduler.config)
 
-    print(pipeline.scheduler)
+    # print(pipeline.scheduler)
     pipeline.set_progress_bar_config(disable=True, leave=True, desc="Pipeline Progress") # for some reason, leave True not working
     
     if mode == 'hdf5':
