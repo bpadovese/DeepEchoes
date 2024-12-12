@@ -8,6 +8,8 @@ def classifier_representation(y, window, step, sr, n_mels, fmin=0, fmax=12000, r
     hop_length = int(step * sr)  # Step size
     n_fft = 1024
     hop_length = 187
+    # n_fft = 2048
+    # hop_length = 281
     S = librosa.feature.melspectrogram(y=y, sr=sr, n_fft=n_fft, hop_length=hop_length, window="hann", n_mels=n_mels, fmin=fmin, fmax=fmax)
     # spec = librosa.power_to_db(S, ref=1.0, top_db=80.0)
     spec = librosa.power_to_db(S, ref=ref, top_db=80.0)

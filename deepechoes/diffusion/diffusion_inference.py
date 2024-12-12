@@ -53,28 +53,33 @@ def make_grid_spec(images, cols):
 
 def to_img(pipeline, num_samples, output_path='./dataset', batch_size=8, num_inference_steps=1000, display=None):
     num_batches = (num_samples + batch_size - 1) // batch_size 
-    for batch_num in tqdm(range(num_batches)):
-        batch_size_adjusted = min(batch_size, num_samples - batch_num * batch_size) # calculate the batch size for the current batch (will be different for the last batch)
-        
-        # Generate an image
-        images = pipeline(
-            batch_size=batch_size_adjusted, 
-            generator=None,
-            num_inference_steps=num_inference_steps,
-            return_dict=False
-            )[0]
-        
-        if display:
-            spec_grid = make_grid_spec(images, cols=4)
-            # Save the figure
-            spec_grid.savefig(output_path / f'{str(batch_num)}.png', bbox_inches='tight')
-        else:
-            # Save spectrograms one by one
-            for i, image in enumerate(images):  # `images` is a list of PIL.Image objects
-                idx = batch_num * batch_size + i
-                image.save(output_path / f"diffusion_{idx}.png")
+    
+    # Outer loop for batches
+    with tqdm(total=num_batches, desc="Processing Batches") as batch_bar:
+        for batch_num in range(num_batches):
+            batch_size_adjusted = min(batch_size, num_samples - batch_num * batch_size) # calculate the batch size for the current batch (will be different for the last batch)
             
-            # save_specs_individually(images, output_path=output_path, prefix=f'batch_{batch_num}')
+            # Generate an image
+            images = pipeline(
+                batch_size=batch_size_adjusted, 
+                generator=None,
+                num_inference_steps=num_inference_steps,
+                return_dict=False
+                )[0]
+            
+            batch_bar.update(1)
+
+            if display:
+                spec_grid = make_grid_spec(images, cols=4)
+                # Save the figure
+                spec_grid.savefig(output_path / f'{str(batch_num)}.png', bbox_inches='tight')
+            else:
+                # Save spectrograms one by one
+                for i, image in enumerate(images):  # `images` is a list of PIL.Image objects
+                    idx = batch_num * batch_size + i
+                    image.save(output_path / f"diffusion_{idx}.png")
+                
+                # save_specs_individually(images, output_path=output_path, prefix=f'batch_{batch_num}')
 
 def to_hdf5(pipeline, num_samples, output_path='diffusion.h5', table_name='/train', label=1, batch_size=8, num_inference_steps=1000):
     
@@ -113,13 +118,13 @@ def diffusion_inference(model_path, mode, num_samples, output_path='diffusion.h5
     
     # Load the diffusion model
     pipeline = DiffusionPipeline.from_pretrained(model_path).to("cuda")
-    # print(pipeline.scheduler)
+    print(pipeline.scheduler)
     # Replace the scheduler with DDIMScheduler
-    # generator.scheduler = DDIMScheduler.from_config(generator.scheduler.config)
+    # pipeline.scheduler = DDIMScheduler.from_config(pipeline.scheduler.config)
 
-    # print(pipeline.scheduler)
-    pipeline.set_progress_bar_config(disable=True)
-
+    print(pipeline.scheduler)
+    pipeline.set_progress_bar_config(disable=True, leave=True, desc="Pipeline Progress") # for some reason, leave True not working
+    
     if mode == 'hdf5':
         to_hdf5(pipeline, num_samples, output_path, table_name, label, batch_size, num_inference_steps)
     else:
