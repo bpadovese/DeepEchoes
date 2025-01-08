@@ -79,13 +79,13 @@ def to_img(pipeline, num_samples, output_path='./dataset', batch_size=8, num_inf
                 num_inference_steps=num_inference_steps,
                 return_dict=False
                 )[0]
-            print(len(images))
+            
             if real_spectrograms is not None:
                 # Apply filtering
                 images_array = np.array([np.array(img) for img in images])  # Convert to numpy array
                 _, keep_indices = filter_spectrograms(images_array, real_pca_scores, pca)
                 images = [img for i, img in enumerate(images) if keep_indices[i]]
-                print(len(images))
+
     
             if display:
                 spec_grid = make_grid_spec(images, cols=4)
@@ -96,7 +96,7 @@ def to_img(pipeline, num_samples, output_path='./dataset', batch_size=8, num_inf
                 for i, image in enumerate(images):
                     if num_valid_samples >= num_samples:
                         break
-                    image.save(output_path / f"filtered_{num_valid_samples}.png")
+                    image.save(output_path / f"diffusion_{num_valid_samples}.png")
                     num_valid_samples += 1
                     pbar.update(1)
                 
