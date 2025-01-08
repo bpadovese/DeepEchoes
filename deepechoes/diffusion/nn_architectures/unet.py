@@ -6,9 +6,9 @@ from diffusers import UNet2DModel
 
 
 
-def huggingface_unet(channels=3):
+def huggingface_unet(sample_size=128, channels=3):
     model = UNet2DModel(
-        sample_size=128,  # the target image resolution
+        sample_size=sample_size,  # the target image resolution
         in_channels=channels,  # the number of input channels, 3 for RGB images
         out_channels=channels,  # the number of output channels
         layers_per_block=2,  # how many ResNet layers to use per UNet block
@@ -34,30 +34,30 @@ def huggingface_unet(channels=3):
     )
     return model
 
-unet_config = {
-    "sample_size": 128,                  # Size of the generated images (spectrograms)
-    "in_channels": 1,                    # Number of input channels (1 for grayscale spectrograms)
-    "out_channels": 1,                   # Number of output channels (1 for grayscale spectrograms)
-    "down_block_types": (                # Types of down-sampling blocks
-        "DownBlock2D", 
-        "DownBlock2D",
-        "DownBlock2D",
-        "AttnDownBlock2D",               # Adding attention layers can help the model focus on important features
-        "DownBlock2D"
-    ),
-    "up_block_types": (                  # Types of up-sampling blocks
-        "UpBlock2D",
-        "AttnUpBlock2D",                 # Adding attention layers can help the model focus on important features
-        "UpBlock2D",
-        "UpBlock2D",
-        "UpBlock2D"
-    ),
-    "block_out_channels": (64, 128, 256, 512, 1024),  # Number of output channels for each block
-    "layers_per_block": 2,               # Number of layers in each block
-    "attention_resolutions": [16, 8],    # Resolutions at which attention is applied
-    "norm_num_groups": 32,               # Number of groups for group normalization
-    "dropout": 0.1                       # Dropout rate to avoid overfitting
-}
+# unet_config = {
+#     "sample_size": 128,                  # Size of the generated images (spectrograms)
+#     "in_channels": 1,                    # Number of input channels (1 for grayscale spectrograms)
+#     "out_channels": 1,                   # Number of output channels (1 for grayscale spectrograms)
+#     "down_block_types": (                # Types of down-sampling blocks
+#         "DownBlock2D", 
+#         "DownBlock2D",
+#         "DownBlock2D",
+#         "AttnDownBlock2D",               # Adding attention layers can help the model focus on important features
+#         "DownBlock2D"
+#     ),
+#     "up_block_types": (                  # Types of up-sampling blocks
+#         "UpBlock2D",
+#         "AttnUpBlock2D",                 # Adding attention layers can help the model focus on important features
+#         "UpBlock2D",
+#         "UpBlock2D",
+#         "UpBlock2D"
+#     ),
+#     "block_out_channels": (64, 128, 256, 512, 1024),  # Number of output channels for each block
+#     "layers_per_block": 2,               # Number of layers in each block
+#     "attention_resolutions": [16, 8],    # Resolutions at which attention is applied
+#     "norm_num_groups": 32,               # Number of groups for group normalization
+#     "dropout": 0.1                       # Dropout rate to avoid overfitting
+# }
 
 class UNet(nn.Module):
     def __init__(self, in_channels=1, out_channels=1, init_features=32):

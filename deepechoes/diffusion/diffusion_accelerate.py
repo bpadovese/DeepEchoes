@@ -236,13 +236,13 @@ def main(dataset, mode='img', train_table="/train", image_size=128, train_batch_
     train_dataloader = DataLoader(train_dataset, batch_size=train_batch_size, shuffle=True)
     noise_scheduler = DDPMScheduler(num_train_timesteps=num_timesteps)
 
-    model = huggingface_unet(channels=1)
+    model = huggingface_unet(sample_size=image_size, channels=1)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
 
     lr_scheduler = get_cosine_schedule_with_warmup(
         optimizer=optimizer,
         num_warmup_steps=lr_warmup_steps,
-        num_training_steps=(len(train_dataloader) * num_epochs),
+        num_training_steps=(len(train_dataloader) * num_epochs) // gradient_accumulation_steps,
     )
 
     from accelerate import notebook_launcher
