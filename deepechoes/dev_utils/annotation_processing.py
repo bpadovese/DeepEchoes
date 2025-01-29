@@ -111,6 +111,126 @@ def define_segments(df, duration=3.0, center=True):
 
     return df
 
+def generate_time_shifted_segments(
+        df: pd.DataFrame, 
+        step: float, 
+        min_overlap: float = 0.5, 
+        duration: float | None = None, 
+        include_unshifted: bool = True
+    ) -> pd.DataFrame:
+    """
+    Generate multiple time-shifted segments of each annotation by shifting the selection window
+    in steps of length `step` both forward and backward in time, ensuring a minimum overlap
+    with the *original* annotation.
+
+    Note: The shifting process can result in `start` and `end` times that fall outside the original 
+    recording. For example, if an annotation starts at time 5 and a shift of -10 is applied, 
+    the new start time will be -5. Similarly, if an annotation ends at 10 and a shift results 
+    in a duration that extends beyond the recording length (e.g., to time 15 when the recording 
+    ends at 12) the end time will be 15. Users should handle these cases as needed.
+    
+
+    Args:
+        df : pd.DataFrame
+            A DataFrame containing at least 'start' and 'end' columns, which define 
+            the intervals for each annotation.
+        step : float
+            The step size (in seconds) for shifting the window both forward and backward 
+            directions.
+        min_overlap : float
+            The minimum overlap fraction (between 0 and 1) required between the 
+            *original* annotation and the shifted annotation. This fraction is relative
+            to the duration of the *original* annotation.
+            - Must be greater than 0 and less than or equal to 1.
+            - 1 means the entire duration of the original interval must be contained
+              within the shifted interval.
+        duration : float, optional
+            The duration of each shifted instance. If None, the original annotation's 
+            duration is used for each shifted instance. Defaults to None.
+        include_unshifted : bool, optional
+            If True, includes the unshifted segment annotation in the output (the central 
+            annotation is without shift and often corresponds to just the annotation 
+            itself, if the annotation and duration have the same length). If False, excludes the original annotation from the generated shifted instances. Defaults to False.
+
+    Returns:
+        pd.DataFrame
+            A new DataFrame containing the time-shifted instances. Preserves all other columns.
+
+    Raises:
+        ValueError
+            If `min_overlap` is not within the range [0, 1].
+
+    Example:
+        >>> import pandas as pd
+        >>> data = {'start': [0, 10], 'end': [5, 15]}
+        >>> df = pd.DataFrame(data)
+        >>> generate_time_shifted_segments(df, step=2.5, min_overlap=0.5, duration=5.0, include_unshifted=False)
+           start   end
+        0   -2.5   2.5
+        0    2.5   7.5
+        1    7.5  12.5
+        1   12.5  17.5
+
+        >>> generate_time_shifted_segments(df, step=1.0, min_overlap=0.5, include_unshifted=True)
+           start  end
+        0     -2    3
+        0     -1    4
+        0      0    5
+        0      1    6
+        0      2    7
+        1      8   13
+        1      9   14
+        1     10   15
+        1     11   16
+        1     12   17
+    """
+    # Check if min_overlap is within the valid range [0, 1]
+    if not (0 < min_overlap <= 1):
+        raise ValueError("min_overlap must be greater than 0 and less than or equal to 1.")
+
+    # Initialize list to store all time-shifted instances
+    shifted_instances = []
+    
+    for _, row in df.iterrows():
+        original_start, original_end = row['start'], row['end']
+        annotation_duration = original_end - original_start
+        
+        # Use the annotation's original duration if duration is None
+        current_duration = duration if duration is not None else annotation_duration
+
+        # Determine the minimum required overlap based on the shorter duration
+        # min_overlap_duration = min(annotation_duration, current_duration) * min_overlap
+        min_overlap_duration = annotation_duration * min_overlap
+
+        # Create shifted windows both forward and backward in time
+        shift_range = np.arange(-annotation_duration, annotation_duration, step)
+
+        # Optionally exclude shift == 0 to avoid duplicating the original annotation
+        if not include_unshifted:
+            shift_range = shift_range[shift_range != 0]  # Exclude 0 from the shift range
+
+        for shift in shift_range:
+            # Calculate the shifted start and end times
+            new_start = original_start + shift
+            new_end = new_start + current_duration
+
+            # Ensure overlap between shifted window and original annotation
+            overlap_start = max(original_start, new_start)
+            overlap_end = min(original_end, new_end)
+            overlap_duration = max(0, overlap_end - overlap_start)
+
+            if overlap_duration >= min_overlap_duration:
+                # Create a new instance if overlap condition is satisfied
+                new_instance = row.copy()
+                new_instance['start'] = new_start
+                new_instance['end'] = new_end
+                shifted_instances.append(new_instance)
+    
+    # Create a new DataFrame from the shifted instances
+    shifted_df = pd.DataFrame(shifted_instances)
+    
+    return shifted_df
+
 def generate_time_shifted_instances(df, step, min_overlap=0.5, duration=3.0, include_original=False):
     """
     Generate multiple time-shifted instances of each annotation by shifting the selection window

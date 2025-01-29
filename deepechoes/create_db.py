@@ -5,11 +5,12 @@ import pandas as pd
 import json
 import librosa
 import random
+import noisereduce as nr
 from tqdm import tqdm
 from scipy.signal import butter, sosfilt
 from pathlib import Path
-from deepechoes.dev_utils.audio_processing import load_segment
-from deepechoes.dev_utils.annotation_processing import standardize, define_segments, generate_time_shifted_instances, create_random_segments
+from deepechoes.dev_utils.audio_processing import load_segment, pad_or_crop_audio, time_shift_signal_dynamic
+from deepechoes.dev_utils.annotation_processing import standardize, define_segments, generate_time_shifted_segments, generate_time_shifted_instances, create_random_segments
 from deepechoes.dev_utils.hdf5_helper import create_table_description, insert_spectrogram_data, create_or_get_table, save_dataset_attributes
 from deepechoes.dev_utils.spec_preprocessing import classifier_representation
 from deepechoes.dev_utils.file_management import file_duration_table
@@ -56,11 +57,13 @@ def create_db(data_dir, audio_representation, mode='hdf5', annotations=None, ann
             for label in labels:
                 # Define segments for the given label based on annotation data
                 selections[label] = define_segments(annots, duration=config['duration'], center=True)
-
+                print(selections[label])
                 # If annotation_step is set, create time-shifted instances
                 if annotation_step > 0:
-                    shifted_segments = generate_time_shifted_instances(selections[label], step=annotation_step, min_overlap=step_min_overlap)
-
+                    # shifted_segments = generate_time_shifted_instances(selections[label], step=annotation_step, min_overlap=step_min_overlap)
+                    shifted_segments = generate_time_shifted_segments(selections[label], step=annotation_step, min_overlap=step_min_overlap, include_unshifted=False)              
+                    print('hi')
+                    print(shifted_segments)
                     if only_augmented:
                         # Only include the time-shifted segments and discard the original ones
                         selections[label] = shifted_segments
@@ -121,8 +124,8 @@ def create_db(data_dir, audio_representation, mode='hdf5', annotations=None, ann
         output = os.path.join(os.getcwd(), output)
     Path(os.path.dirname(output)).mkdir(parents=True, exist_ok=True) #creating dir if it doesnt exist
 
-    if overwrite and os.path.exists(output) and mode == 'hdf5': 
-        os.remove(output)
+    if overwrite and output_path.exists():
+        output_path.unlink()
 
     if mode == 'hdf5':
         print('\nCreating HDF5 db...')
@@ -162,7 +165,7 @@ def create_db(data_dir, audio_representation, mode='hdf5', annotations=None, ann
                     end = start + config['duration']
 
                     # Load audio segment and create its representation
-                    y, sr = load_segment(path=file_path, start=start, end=end, new_sr=config['sr'])
+                    y, sr = load_segment(path=file_path, start=start, end=end, new_sr=config['sr'])                    
                     representation_data = classifier_representation(y, config["window"], config["step"], sr, config["num_filters"], fmin=config["fmin"], fmax=config["fmax"])
 
                     # Update global min and max
@@ -215,24 +218,33 @@ def create_db(data_dir, audio_representation, mode='hdf5', annotations=None, ann
                     start = file_duration - config['duration'] / 2
                 end = start + config['duration']
 
-                y, sr = load_segment(path=file_path, start=start, end=end, new_sr=config['sr'])
-                spectrogram_image = classifier_representation(y, config["window"], config["step"], sr, config["num_filters"], 
-                                                              fmin=config["fmin"], fmax=config["fmax"], mode='img')
+                y, sr = load_segment(path=file_path, start=start, end=end, new_sr=config['sr'], pad=None)
+                # Generate time-shifted variations
+                shifted_versions = time_shift_signal_dynamic(y, sr, duration=config['duration'], num_shifts=10)
+                # y = pad_or_crop_audio(y, sr, config['duration'], start, end)
                 
-                # output_path = os.path.join(label_dir, f"{row['filename'].split('.')[0]}_{start:.2f}_{end:.2f}.png")
-                        # Get the base filename without directories or extensions
-                base_filename = os.path.basename(row['filename']).split('.')[0]
-                
-                # Update the index for this file
-                        # Initialize the index for this file if it doesn't exist
-                if base_filename not in file_image_counts:
-                    file_image_counts[base_filename] = 1  # Start index at 1
-                else:
-                    file_image_counts[base_filename] += 1  # Increment the count for each subsequent image
-                # Use the index as part of the filename
-                idx = file_image_counts[base_filename]
-                output_path = os.path.join(label_dir, f"{base_filename}_{idx}.png")
-                spectrogram_image.save(output_path)
+                # Process each time-shifted version
+                for shift_idx, shifted_y in enumerate(shifted_versions):
+                    # Apply noise reduction
+                    y = nr.reduce_noise(y=shifted_y, sr=sr)
+                    
+                    spectrogram_image = classifier_representation(y, config["window"], config["step"], sr, config["num_filters"], 
+                                                                fmin=config["fmin"], fmax=config["fmax"], mode='img')
+                    
+                    # output_path = os.path.join(label_dir, f"{row['filename'].split('.')[0]}_{start:.2f}_{end:.2f}.png")
+                            # Get the base filename without directories or extensions
+                    base_filename = os.path.basename(row['filename']).split('.')[0]
+                    
+                    # Update the index for this file
+                            # Initialize the index for this file if it doesn't exist
+                    if base_filename not in file_image_counts:
+                        file_image_counts[base_filename] = 1  # Start index at 1
+                    else:
+                        file_image_counts[base_filename] += 1  # Increment the count for each subsequent image
+                    # Use the index as part of the filename
+                    idx = file_image_counts[base_filename]
+                    output_path = os.path.join(label_dir, f"{base_filename}_{idx}.png")
+                    spectrogram_image.save(output_path)
 
 def main():
     import argparse
@@ -244,14 +256,21 @@ def main():
 
     class ParseKwargs(argparse.Action):
         def __call__(self, parser, namespace, values, option_string=None):
-            # Process as key-value pairs
-            setattr(namespace, self.dest, dict())
-            for value in values:
-                key, val = value.split('=')
-                if val.isdigit():
-                    val = int(val)
-                getattr(namespace, self.dest)[key] = val
-
+            if len(values) == 1 and not '=' in values[0]:  # Single value
+                setattr(namespace, self.dest, [int(values[0])] if values[0].isdigit() else [values[0]])
+            elif not any('=' in value for value in values):  # List of values
+                setattr(namespace, self.dest, [int(val) if val.isdigit() else val for val in values])
+            else:  # Key-value pairs
+                kwargs = {}
+                for value in values:
+                    if '=' not in value:
+                        parser.error(f"Invalid format for {option_string}: expected key=value but got '{value}'")
+                    key, val = value.split('=')
+                    if val.isdigit():
+                        val = int(val)
+                    kwargs[key] = val
+                setattr(namespace, self.dest, kwargs)
+                
     class RandomSelectionsAction(argparse.Action):
         def __call__(self, parser, namespace, values, option_string=None):
             if len(values) < 2:
