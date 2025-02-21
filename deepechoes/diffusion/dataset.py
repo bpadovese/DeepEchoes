@@ -72,7 +72,11 @@ class NormalizeToRange:
         # Scale to [new_min, new_max]
         tensor = tensor * (self.new_max - self.new_min) + self.new_min
         return tensor
-    
+
+class LogMagnitudeTransform:
+    def __call__(self, tensor):
+        return torch.log1p(tensor)
+        
 def spec_dataset(dataset, train_table="/train"):
     db = tables.open_file(dataset, mode='r')
     table = db.get_node(train_table + '/data')
@@ -102,11 +106,3 @@ def dino_dataset(n=8000):
     y = (y/48 - 1) * 4
     X = np.stack((x, y), axis=1)
     return TensorDataset(torch.from_numpy(X.astype(np.float32)))
-
-
-def apply_transforms(representation_data_tensor, shape):
-    resize_transform = transforms.Resize(shape)
-    normalization = NormalizeToRange(new_min=-1, new_max=1)
-    representation_data_tensor = resize_transform(representation_data_tensor)
-    representation_data_tensor = normalization(representation_data_tensor)
-    return representation_data_tensor

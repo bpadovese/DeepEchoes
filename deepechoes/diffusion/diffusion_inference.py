@@ -59,13 +59,12 @@ def make_grid_spec(images, cols):
     return fig
 
 def to_img(pipeline, num_samples, output_path='./dataset', batch_size=8, num_inference_steps=1000, display=None, real_spectrograms=None):    
+    num_valid_samples = 0
+    batch_num = 0
     if real_spectrograms is not None:
         # Train PCA on real spectrograms
         pca = PCA(n_components=2)
-        real_pca_scores = pca.fit_transform(real_spectrograms)
-
-        num_valid_samples = 0
-        batch_num = 0
+        real_pca_scores = pca.fit_transform(real_spectrograms)    
 
     # Outer loop for batches
     with tqdm(total=num_samples, desc="Generating Samples") as pbar:
@@ -150,7 +149,7 @@ def diffusion_inference(model_path, mode, num_samples, output_path='diffusion.h5
     # Replace the scheduler with DDIMScheduler
     pipeline.scheduler = DDIMScheduler.from_config(pipeline.scheduler.config)
 
-    # print(pipeline.scheduler)
+    print(pipeline.scheduler)
     pipeline.set_progress_bar_config(disable=True, leave=True, desc="Pipeline Progress") # for some reason, leave True not working
     
     real_spectrograms = None

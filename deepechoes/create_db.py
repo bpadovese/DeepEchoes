@@ -25,7 +25,6 @@ def create_db(data_dir, audio_representation, mode='hdf5', annotations=None, ann
               output=None, table_name=None, random_selections=None, avoid_annotations=None, overwrite=False, seed=None, 
               n_samples=None, only_augmented=False):
     
-    print(seed)
     # Initialize random seed for reproducibility
     if seed is not None:
         np.random.seed(seed)
@@ -42,6 +41,14 @@ def create_db(data_dir, audio_representation, mode='hdf5', annotations=None, ann
         config = json.load(f)
 
     annots = None
+
+    print('Extracting files durations')
+    files = file_duration_table(data_dir, num=None)
+
+    # Creating a dictionary for quick and easy lookup and access: {filename: duration}
+    file_durations = dict(zip(files["filename"], files["duration"]))
+
+
     if annotations is not None: # If an annotation table is provided
         annots = pd.read_csv(annotations)
         annots = standardize(annots, labels=labels) # Standardize annotations by mapping labels to integers
@@ -57,19 +64,25 @@ def create_db(data_dir, audio_representation, mode='hdf5', annotations=None, ann
             for label in labels:
                 # Define segments for the given label based on annotation data
                 selections[label] = define_segments(annots, duration=config['duration'], center=True)
-                print(selections[label])
+
                 # If annotation_step is set, create time-shifted instances
                 if annotation_step > 0:
                     # shifted_segments = generate_time_shifted_instances(selections[label], step=annotation_step, min_overlap=step_min_overlap)
                     shifted_segments = generate_time_shifted_segments(selections[label], step=annotation_step, min_overlap=step_min_overlap, include_unshifted=False)              
-                    print('hi')
-                    print(shifted_segments)
+
                     if only_augmented:
                         # Only include the time-shifted segments and discard the original ones
                         selections[label] = shifted_segments
                     else:
                         # Concatenate the original segments with the new time-shifted instances
                         selections[label] = pd.concat([selections[label], shifted_segments], ignore_index=True)
+            
+            # Filter out invalid annotations
+            selections[label] = selections[label][
+                (selections[label]['start'] >= 0) &  # Start time must be non-negative
+                (selections[label].apply(lambda row: row['end'] <= file_durations.get(row['filename'], float('inf')), axis=1))  # End time must be within file duration
+            ]
+
         else:
             # If start and end are not present, treat annotations as selections directly 
             for label in labels:
@@ -94,7 +107,7 @@ def create_db(data_dir, audio_representation, mode='hdf5', annotations=None, ann
             num_segments = biggest_selection
 
         print(f'\nGenerating {num_segments} samples with label {random_selections[1]}...')
-        files = file_duration_table(data_dir, num=None)
+        # files = file_duration_table(data_dir, num=None)
 
         # If filenames are provided, filter the file list based on them
         if random_selections[2]:
@@ -104,7 +117,7 @@ def create_db(data_dir, audio_representation, mode='hdf5', annotations=None, ann
         
         # Generate random segments based on the file durations and label
         rando = create_random_segments(files, config['duration'], num_segments, label=random_selections[1], annotations=annots)
-        # print(rando)
+
         
         if labels is None:
             labels = []
@@ -218,33 +231,34 @@ def create_db(data_dir, audio_representation, mode='hdf5', annotations=None, ann
                     start = file_duration - config['duration'] / 2
                 end = start + config['duration']
 
-                y, sr = load_segment(path=file_path, start=start, end=end, new_sr=config['sr'], pad=None)
+                y, sr = load_segment(path=file_path, start=start, end=end, new_sr=config['sr'])
+                # y, sr = load_segment(path=file_path, start=start, end=end, new_sr=config['sr'], pad=None)
                 # Generate time-shifted variations
-                shifted_versions = time_shift_signal_dynamic(y, sr, duration=config['duration'], num_shifts=10)
+                # shifted_versions = time_shift_signal_dynamic(y, sr, duration=config['duration'], num_shifts=10)
                 # y = pad_or_crop_audio(y, sr, config['duration'], start, end)
                 
                 # Process each time-shifted version
-                for shift_idx, shifted_y in enumerate(shifted_versions):
-                    # Apply noise reduction
-                    y = nr.reduce_noise(y=shifted_y, sr=sr)
-                    
-                    spectrogram_image = classifier_representation(y, config["window"], config["step"], sr, config["num_filters"], 
-                                                                fmin=config["fmin"], fmax=config["fmax"], mode='img')
-                    
-                    # output_path = os.path.join(label_dir, f"{row['filename'].split('.')[0]}_{start:.2f}_{end:.2f}.png")
-                            # Get the base filename without directories or extensions
-                    base_filename = os.path.basename(row['filename']).split('.')[0]
-                    
-                    # Update the index for this file
-                            # Initialize the index for this file if it doesn't exist
-                    if base_filename not in file_image_counts:
-                        file_image_counts[base_filename] = 1  # Start index at 1
-                    else:
-                        file_image_counts[base_filename] += 1  # Increment the count for each subsequent image
-                    # Use the index as part of the filename
-                    idx = file_image_counts[base_filename]
-                    output_path = os.path.join(label_dir, f"{base_filename}_{idx}.png")
-                    spectrogram_image.save(output_path)
+                # for shift_idx, shifted_y in enumerate(shifted_versions):
+                # Apply noise reduction
+                # y = nr.reduce_noise(y=y, sr=sr)
+                
+                spectrogram_image = classifier_representation(y, config["window"], config["step"], sr, config["num_filters"], 
+                                                            fmin=config["fmin"], fmax=config["fmax"], mode='img')
+                
+                # output_path = os.path.join(label_dir, f"{row['filename'].split('.')[0]}_{start:.2f}_{end:.2f}.png")
+                # Get the base filename without directories or extensions
+                base_filename = os.path.basename(row['filename']).split('.')[0]
+                
+                # Update the index for this file
+                # Initialize the index for this file if it doesn't exist
+                if base_filename not in file_image_counts:
+                    file_image_counts[base_filename] = 1  # Start index at 1
+                else:
+                    file_image_counts[base_filename] += 1  # Increment the count for each subsequent image
+                # Use the index as part of the filename
+                idx = file_image_counts[base_filename]
+                output_path = os.path.join(label_dir, f"{base_filename}_{idx}.png")
+                spectrogram_image.save(output_path)
 
 def main():
     import argparse

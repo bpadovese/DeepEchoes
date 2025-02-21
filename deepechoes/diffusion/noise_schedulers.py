@@ -1,4 +1,5 @@
 import torch
+from diffusers import DDPMScheduler
 
 class NoiseScheduler():
     def __init__(self,
@@ -181,3 +182,27 @@ class NoiseScheduler():
             int: The total number of timesteps.
         """
         return self.num_timesteps
+
+def compute_energy_mask(images, threshold=0.1):
+    """
+    Compute an energy mask where higher energy regions (vocalizations) 
+    get more noise, and low-energy (silent) regions get less noise.
+
+    Args:
+        images: (B, 1, H, W) tensor of spectrogram images
+        threshold: Float, threshold for determining vocalization vs. background
+
+    Returns:
+        energy_mask: (B, 1, H, W) tensor where high-energy areas are closer to 1,
+                     and background areas are closer to 0.
+    """
+    # Normalize each image between 0 and 1
+    min_val = images.amin(dim=[2, 3], keepdim=True)  # Min per image
+    max_val = images.amax(dim=[2, 3], keepdim=True)  # Max per image
+    norm_images = (images - min_val) / (max_val - min_val + 1e-6)  # Avoid div by zero
+
+    # Create energy mask: 1 where vocalizations exist, 0 where background is dominant
+    # energy_mask = (norm_images > threshold).float()
+    # Use a continuous energy mask instead of hard thresholding
+    energy_mask = torch.sigmoid((norm_images - threshold) * 10)  # Soft transition
+    return energy_mask

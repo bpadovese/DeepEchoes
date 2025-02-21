@@ -2,15 +2,16 @@ from accelerate import Accelerator
 from huggingface_hub import create_repo, upload_folder
 from tqdm.auto import tqdm
 from pathlib import Path
-from diffusers import DDPMScheduler, DDPMPipeline
+from diffusers import DDPMScheduler, DDPMPipeline, DDIMScheduler
 from PIL import Image
 from torchvision import transforms
 from diffusers.optimization import get_cosine_schedule_with_warmup
 from deepechoes.diffusion.nn_architectures.unet import huggingface_unet
 from matplotlib import pyplot as plt
-from deepechoes.diffusion.dataset import HDF5Dataset, NormalizeToRange, get_leaf_paths
+from deepechoes.diffusion.dataset import HDF5Dataset, NormalizeToRange, LogMagnitudeTransform, get_leaf_paths
 from torch.utils.data import ConcatDataset, DataLoader
 from torchvision.datasets import ImageFolder
+
 import os
 import math
 import numpy as np
@@ -155,7 +156,7 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
 
         accelerator.wait_for_everyone()
 
-        # After each epoch you optionally sample some demo images with evaluate() and save the model
+        # After each epoch optionally sample some demo images with evaluate() and save the model
         if accelerator.is_main_process:
             # Conditions
             is_save_image_epoch = (epoch + 1) % config['save_image_epochs'] == 0
@@ -193,10 +194,18 @@ def select_transform(norm_type, image_size):
                 transforms.ToTensor(),
                 transforms.Normalize([0.5], [0.5]),
             ])
+        case 3:
+            return transforms.Compose([
+                transforms.Resize((image_size, image_size)),
+                transforms.ToTensor(), 
+                LogMagnitudeTransform(),  # Apply log(1 + |S|)
+                transforms.Lambda(lambda x: (x - x.min()) / (x.max() - x.min())),  # Min-max normalize to (0,1)
+                transforms.Normalize([0.5], [0.5]),  # Normalize to [-1,1]
+            ])
         case _:
             raise ValueError("Invalid norm_type value. It should be between 0 and 1.")
         
-def main(dataset, mode='img', train_table="/train", image_size=128, train_batch_size=8, eval_batch_size=8, 
+def main(dataset, pretrained_model=None, mode='img', train_table="/train", image_size=128, train_batch_size=8, eval_batch_size=8, 
          num_epochs=50, num_timesteps=1000, gradient_accumulation_steps=1, learning_rate=1e-4, 
          lr_warmup_steps=500, save_image_epochs=10, save_model_epochs=10, mixed_precision="no", 
          output_dir="trained_models", overwrite_output_dir=True, norm_type=0, seed=None):
@@ -233,10 +242,16 @@ def main(dataset, mode='img', train_table="/train", image_size=128, train_batch_
     total_samples = len(train_dataset)
     print(f"Total number of samples across all datasets: {total_samples}")
 
-    train_dataloader = DataLoader(train_dataset, batch_size=train_batch_size, shuffle=True)
-    noise_scheduler = DDPMScheduler(num_train_timesteps=num_timesteps)
+    train_dataloader = DataLoader(train_dataset, batch_size=train_batch_size, shuffle=True, num_workers=4)
+    
+    if pretrained_model:
+        image_pipe = DDPMPipeline.from_pretrained(pretrained_model)
+        model = image_pipe.unet
+        noise_scheduler = image_pipe.scheduler
+    else:
+        model = huggingface_unet(sample_size=image_size, channels=1)
+        noise_scheduler = DDPMScheduler(num_train_timesteps=num_timesteps)
 
-    model = huggingface_unet(sample_size=image_size, channels=1)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
 
     lr_scheduler = get_cosine_schedule_with_warmup(
@@ -271,6 +286,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Training configuration.")
     parser.add_argument("dataset", type=str, default="img", help="Path to the HDF5 dataset file or image folder.")
+    parser.add_argument("--pretrained_model", type=str, default=None, help="Path to a pretrained DDPM model")
     parser.add_argument('--mode', type=str, choices=['hdf5', 'img'], default='img', help="Specify dataset mode: 'img' to generate images, 'hdf5' for tos tore in HDF5 datasets.")
     parser.add_argument('--train_table', type=str, nargs='+', default='/train', help='HDF5 table name for training data.')
     parser.add_argument("--image_size", type=int, default=128, help="Generated image resolution.")
@@ -293,7 +309,7 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=None, help="Random seed.")
     
     args = parser.parse_args()
-    main(args.dataset, args.mode, args.train_table, args.image_size, args.train_batch_size, args.eval_batch_size,
+    main(args.dataset, args.pretrained_model, args.mode, args.train_table, args.image_size, args.train_batch_size, args.eval_batch_size,
          args.num_epochs, args.num_timesteps, args.gradient_accumulation_steps, args.learning_rate,
          args.lr_warmup_steps, args.save_image_epochs, args.save_model_epochs, args.mixed_precision,
          args.output_dir, args.overwrite_output_dir, args.norm_type, args.seed)
