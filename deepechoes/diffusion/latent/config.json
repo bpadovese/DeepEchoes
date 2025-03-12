@@ -15,7 +15,7 @@
         "DownEncoderBlock2D"
       ],
       "in_channels": 1,
-      "latent_channels": 1,
+      "latent_channels": 4,
       "layers_per_block": 2,
       "norm_num_groups": 32,
       "out_channels": 1,

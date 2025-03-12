@@ -11,7 +11,7 @@ from matplotlib import pyplot as plt
 from deepechoes.diffusion.dataset import HDF5Dataset, NormalizeToRange, LogMagnitudeTransform, get_leaf_paths
 from torch.utils.data import ConcatDataset, DataLoader
 from torchvision.datasets import ImageFolder
-
+from torch.utils.data import Subset
 import os
 import math
 import numpy as np
@@ -220,6 +220,12 @@ def main(dataset, pretrained_model=None, mode='img', train_table="/train", image
         train_transform = select_transform(norm_type, image_size)
         # Load images from the folder
         train_dataset = ImageFolder(root=dataset, transform=train_transform, loader=lambda path: Image.open(path))
+        # Filter indices to include only samples with label 1
+        indices = [i for i, (_, label) in enumerate(train_dataset.samples) if label == 1]
+
+        # Create a subset of the dataset with only class "1"
+        train_dataset = Subset(train_dataset, indices)
+
     else:
         # Select transforms for the training dataset
         train_transform = select_transform(norm_type, image_size)

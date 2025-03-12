@@ -7,12 +7,18 @@ from PIL import Image
 from packaging import version
 from tqdm import tqdm
 from accelerate import Accelerator
+import diffusers
 from diffusers.utils.import_utils import is_xformers_available
+from diffusers.utils.torch_utils import is_compiled_module
 from diffusers.optimization import get_scheduler
 from diffusers.utils import is_wandb_available
+from accelerate.utils import ProjectConfiguration, set_seed
+from accelerate.logging import get_logger
 from taming.modules.losses.vqperceptual import hinge_d_loss, vanilla_d_loss, weights_init, NLayerDiscriminator
-import warnings
+from pathlib import Path
 import shutil
+import contextlib
+import logging
 import gc
 import os
 import numpy as np
@@ -26,6 +32,8 @@ import glob
 
 if is_wandb_available():
     import wandb
+
+logger = get_logger(__name__)
 
 def sample_random_images(dataset_path, num_samples=8, extensions=("jpg", "jpeg", "png")):
     # Recursively find all image files with the given extensions
@@ -74,11 +82,30 @@ def image_grid(imgs, rows, cols):
     return grid
 
 @torch.no_grad()
-def validate(vae, args, accelerator, step):
-    vae = accelerator.unwrap_model(vae)
-    
+def validate(vae, args, accelerator, weight_dtype, step, is_final_validation=False):
+    logger.info("Running validation... ")
+    # Note: I'm not sure why the original code is doing this, but my guess is:
+    # - During regular validation (non-final), we unwrap the distributed model wrapper
+    #   to get the actual VAE being trained at this moment (This is the usual way I would approach validation)
+    # - For final validation, we load from the output directory instead because:
+    #   (1) The saved checkpoint might have FP16 conversion applied (I asked a LLM and it also mentioned EMA weights)
+    #   (2) Ensures we validate exactly what gets saved/published because (3)
+    #   (3) The in-memory model might be in a weird mid-optimizer-step state?
+    #   But still, I am unsure what the point of it is.
+    if not is_final_validation:
+        vae = accelerator.unwrap_model(vae)
+    else:
+        vae = AutoencoderKL.from_pretrained(args.output_dir, torch_dtype=weight_dtype)
+        # Moving the model to the correct device
+        vae = vae.to(accelerator.device, dtype=weight_dtype)
+
+    # Mixed precision context selection:
+    # - Regular validation: Use autocast for faster FP16 inference
+    # - Final validation: Disable autocast for full FP32 precision
+    inference_ctx = contextlib.nullcontext() if is_final_validation else torch.autocast("cuda")
+
     transform = transforms.Compose([
-        transforms.Resize((128, 128)),
+        transforms.Resize((args.resolution_x, args.resolution_y)),
         transforms.ToTensor(),  # Convert to tensor [0, 1]
         transforms.Normalize([0.5], [0.5])  # Normalize to [-1, 1]
     ])
@@ -87,13 +114,14 @@ def validate(vae, args, accelerator, step):
     gen_imgs = []
     orignal_imgs = []
 
-
     for i, validation_image in enumerate(args.validation_image):
         validation_image = Image.open(validation_image).convert("L")
-        targets = transform(validation_image).to(accelerator.device)
+        targets = transform(validation_image).to(accelerator.device, dtype=weight_dtype)
         targets = targets.unsqueeze(0)
 
-        reconstructions = vae(targets).sample # forward pass that encodes and decodes
+        # Run inference with appropriate precision context
+        with inference_ctx:
+            reconstructions = vae(targets).sample # forward pass that encodes and decodes
         
         gen_imgs.append(to_pil(targets))
         orignal_imgs.append(to_pil(reconstructions))
@@ -127,17 +155,18 @@ def validate(vae, args, accelerator, step):
     path_to_save = os.path.join(val_dir, f"iteration_{step}.png")
     final_image.save(path_to_save)
 
+    tracker_key = "test" if is_final_validation else "validation"
     for tracker in accelerator.trackers:
         if tracker.name == "tensorboard":
             # np_images = np.stack([np.asarray(img) for img in images])
             np_images = torch.cat(images, dim=0)
             tracker.writer.add_images(
-                "Original (left), Reconstruction (right)", np_images, step
+                f"{tracker_key}: Original (left), Reconstruction (right)", np_images, step
             )
         elif tracker.name == "wandb":
             tracker.log(
                 {
-                    "Original (left), Reconstruction (right)": [
+                    f"{tracker_key}: Original (left), Reconstruction (right)": [
                         wandb.Image(torchvision.utils.make_grid(image))
                         for _, image in enumerate(images)
                     ]
@@ -148,27 +177,37 @@ def validate(vae, args, accelerator, step):
     return images
 
 def main(args):
-        
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Set seed for reproducibility
-    torch.manual_seed(args.seed)
-    np.random.seed(args.seed)
-    random.seed(args.seed)
+    # Set seed for torch, numpy and random
+    if args.seed:
+        set_seed(args.seed)
+   
+    logging_dir = Path(args.output_dir, args.logging_dir)
+    # See: https://huggingface.co/docs/accelerate/en/package_reference/utilities#accelerate.utils.ProjectConfiguration
+    accelerator_project_config = ProjectConfiguration(project_dir=args.output_dir, logging_dir=logging_dir)
+
+    accelerator = Accelerator(
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
+        mixed_precision=args.mixed_precision,
+        log_with=args.report_to,
+        project_config=accelerator_project_config,
+    )
 
     # Define transformations
     transform = transforms.Compose([
-        transforms.Resize((128, 128)),
+        transforms.Resize((args.resolution_x, args.resolution_y)),
         transforms.ToTensor(),  # Convert to tensor [0, 1]
         transforms.Normalize([0.5], [0.5])  # Normalize to [-1, 1]
     ])
 
     train_dataset = ImageFolder(root=args.dataset_path, transform=transform, loader=lambda path: Image.open(path))
     train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=4)
-
+    
     # Load AutoencoderKL model
-    config = AutoencoderKL.load_config("deepechoes/diffusion/latent/config.json")
+    # ToDo: add ability to laod pretrained model
+    config = AutoencoderKL.load_config(args.model_config)
     vae = AutoencoderKL.from_config(config)
     lpips_loss_fn = lpips.LPIPS(net="vgg").eval()
     discriminator = NLayerDiscriminator(input_nc=1, n_layers=3, use_actnorm=False).apply(weights_init)
@@ -182,31 +221,64 @@ def main(args):
     discriminator.requires_grad_(True)
     discriminator.train()
 
-    if args.enable_xformers_memory_efficient_attention:
+    if args.enable_xformers:
         if is_xformers_available():
             import xformers
 
             xformers_version = version.parse(xformers.__version__)
             if xformers_version == version.parse("0.0.16"):
-                warnings.warn(
+                logger.warning(
                     "xFormers 0.0.16 cannot be used for training in some GPUs. If you observe problems during training, please update xFormers to at least 0.0.17. See https://huggingface.co/docs/diffusers/main/en/optimization/xformers for more details."
                 )
             vae.enable_xformers_memory_efficient_attention()
         else:
             raise ValueError("xformers is not available. Make sure it is installed correctly")
 
+    # Taken from [Sayak Paul's Diffusers PR #6511](https://github.com/huggingface/diffusers/pull/6511/files)
+    def unwrap_model(model):
+        model = accelerator.unwrap_model(model)
+        model = model._orig_mod if is_compiled_module(model) else model
+        return model
+    
+    # Check that all trainable models are in full precision
+    low_precision_error_string = (
+        " Please make sure to always have all model weights in full float32 precision when starting training - even if"
+        " doing mixed precision training, copy of the weights should still be float32."
+    )
+
+    if unwrap_model(vae).dtype != torch.float32:
+        raise ValueError(f"VAE loaded as datatype {unwrap_model(vae).dtype}. {low_precision_error_string}")
+
+    # Enable TF32 for faster training on Ampere GPUs and above,
+    # cf https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices
+    if args.allow_tf32:
+        torch.backends.cuda.matmul.allow_tf32 = True
+
+    # Use 8-bit Adam for lower memory usage or to fine-tune the model in 16GB GPUs
+    if args.use_8bit_adam:
+        try:
+            import bitsandbytes as bnb
+        except ImportError:
+            raise ImportError(
+                "To use 8-bit Adam, please install the bitsandbytes library: `pip install bitsandbytes`."
+            )
+
+        optimizer_class = bnb.optim.AdamW8bit
+    else:
+        optimizer_class = torch.optim.AdamW
+
     # Optimizer
     params_to_optimize = filter(lambda p: p.requires_grad, vae.parameters())
     disc_params_to_optimize = filter(lambda p: p.requires_grad, discriminator.parameters())
 
-    optimizer = torch.optim.AdamW(
+    optimizer = optimizer_class(
         params_to_optimize,
         lr=args.learning_rate,
         betas=(0.9, 0.999),
         weight_decay=0.01,
         eps=1e-08,
     )
-    disc_optimizer = torch.optim.AdamW(
+    disc_optimizer = optimizer_class(
         disc_params_to_optimize,
         lr=args.learning_rate,
         betas=(0.9, 0.999),
@@ -214,12 +286,15 @@ def main(args):
         eps=1e-08,
     )
 
-    num_training_steps = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps) * args.num_epochs
+    if args.max_train_steps:
+        num_training_steps = args.max_train_steps
+    else:
+        num_training_steps = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps) * args.num_epochs
 
     lr_scheduler = get_scheduler(
         args.lr_scheduler,
         optimizer=optimizer,
-        num_warmup_steps=500,
+        num_warmup_steps=args.lr_warmup_steps,
         num_training_steps=num_training_steps,
         num_cycles=1,
         power=1.0,
@@ -227,18 +302,24 @@ def main(args):
     disc_lr_scheduler = get_scheduler(
         args.disc_lr_scheduler,
         optimizer=disc_optimizer,
-        num_warmup_steps=500,
+        num_warmup_steps=args.lr_warmup_steps,
         num_training_steps=num_training_steps,
         num_cycles=1,
         power=1.0,
     )
 
-    accelerator = Accelerator(
-        gradient_accumulation_steps=args.gradient_accumulation_steps,
-        mixed_precision=args.mixed_precision,
-        log_with=args.report_to,
-        project_dir=os.path.join(args.output_dir, "logs"),
+    # Make one log on every process with the configuration for debugging.
+    logging.basicConfig(
+        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+        datefmt="%m/%d/%Y %H:%M:%S",
+        level=logging.INFO,
     )
+
+    logger.info(accelerator.state, main_process_only=False)
+    if accelerator.is_local_main_process:
+        diffusers.utils.logging.set_verbosity_info()
+    else:
+        diffusers.utils.logging.set_verbosity_error()
 
 
     # Prepare everything. There is no order
@@ -246,9 +327,17 @@ def main(args):
         vae, discriminator, optimizer, disc_optimizer, train_dataloader, lr_scheduler, disc_lr_scheduler
     )
 
-    # vae.to(accelerator.device)
-    lpips_loss_fn.to(accelerator.device)
-    # discriminator.to(accelerator.device)
+    # For mixed precision training we cast the weights to half-precision
+    # as these models are only used for inference, keeping weights in full precision is not required.
+    weight_dtype = torch.float32
+    if accelerator.mixed_precision == "fp16":
+        weight_dtype = torch.float16
+    elif accelerator.mixed_precision == "bf16":
+        weight_dtype = torch.bfloat16
+
+    vae.to(accelerator.device, dtype=weight_dtype)
+    lpips_loss_fn.to(accelerator.device, dtype=weight_dtype)
+    discriminator.to(accelerator.device, dtype=weight_dtype)
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
@@ -257,20 +346,20 @@ def main(args):
 
     # Handle the repository creation
     if accelerator.is_main_process:
-        if args.output_dir is not None:
-            os.makedirs(args.output_dir, exist_ok=True)
+        # if args.output_dir is not None:
+        #     os.makedirs(args.output_dir, exist_ok=True)
         tracker_config = dict(vars(args))
         accelerator.init_trackers(args.tracker_project_name, config=tracker_config)
 
     total_batch_size = args.batch_size * args.gradient_accumulation_steps
-    print("***** Running training *****")
-    print(f"  Num examples = {len(train_dataset)}")
-    print(f"  Num batches each epoch = {len(train_dataloader)}")
-    print(f"  Num Epochs = {args.num_epochs}")
-    print(f"  Instantaneous batch size per device = {args.batch_size}")
-    print(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
-    print(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
-    print(f"  Total optimization steps = {num_training_steps}")
+    logger.info("***** Running training *****")
+    logger.info(f"  Num examples = {len(train_dataset)}")
+    logger.info(f"  Num batches each epoch = {len(train_dataloader)}")
+    logger.info(f"  Num Epochs = {args.num_epochs}")
+    logger.info(f"  Instantaneous batch size per device = {args.batch_size}")
+    logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
+    logger.info(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
+    logger.info(f"  Total optimization steps = {num_training_steps}")
 
     if not args.validation_image:
         args.validation_image = sample_random_images(args.dataset_path)
@@ -295,7 +384,7 @@ def main(args):
         for step, batch in enumerate(train_dataloader):
             # Forward pass: Encode and decode
             # Convert images to latent space 
-            targets = batch[0]
+            targets = batch[0].to(dtype=weight_dtype)
             posterior = vae.encode(targets).latent_dist
             latents = posterior.sample()
 
@@ -388,13 +477,15 @@ def main(args):
                         "disc_lr": disc_lr_scheduler.get_last_lr()[0]
                     }
 
-                    # # Backpropagation and optimizer step for Discriminator
-                    # accelerator.backward(disc_loss)
-                    # if accelerator.sync_gradients:
-                    #     accelerator.clip_grad_norm_(discriminator.parameters(), 1.0)  # Gradient clipping
-                    # disc_optimizer.step() # Update disc weights
-                    # disc_lr_scheduler.step()
-                    # disc_optimizer.zero_grad()
+                    # Backpropagation and optimizer step for Discriminator
+                    # For some reason this was not included in the original code, but doesnt really make sense to me
+                    accelerator.backward(disc_loss)
+                    if accelerator.sync_gradients:
+                        accelerator.clip_grad_norm_(discriminator.parameters(), 1.0)  # Gradient clipping
+                    disc_optimizer.step() # Update disc weights
+                    disc_lr_scheduler.step()
+                    disc_optimizer.zero_grad()
+
 
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
@@ -411,38 +502,54 @@ def main(args):
                         checkpoints = [d for d in os.listdir(args.output_dir) if d.startswith("checkpoint")]
                         checkpoints = sorted(checkpoints, key=lambda x: int(x.split("-")[1]))
 
+                        
+                        
                         # keeping up to 5 checkpoints
                         if len(checkpoints) >= 5:
-                            for ckpt in checkpoints[:len(checkpoints) - 5 + 1]:
-                                shutil.rmtree(os.path.join(args.output_dir, ckpt))
+                            num_to_remove = len(checkpoints) - 5 + 1
+                            removing_checkpoints = checkpoints[0:num_to_remove]
+                            
+                            logger.info(f"{len(checkpoints)} checkpoints already exist, removing {len(removing_checkpoints)} checkpoints")
+                            logger.info(f"removing checkpoints: {', '.join(removing_checkpoints)}")
+                            
+                            for removing_checkpoint in removing_checkpoints:
+                                shutil.rmtree(os.path.join(args.output_dir, removing_checkpoint))
 
                         save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}-epoch-{epoch}")
                         accelerator.save_state(save_path)
+                        logger.info(f"Saved state to {save_path}")
 
                     if is_validation_step:
                         validate(
                             vae,
                             args,
                             accelerator,
-                            global_step,
+                            weight_dtype=weight_dtype,
+                            step=global_step,
                         )
 
             progress_bar.set_postfix(**logs)
             accelerator.log(logs, step=global_step)
 
+            if global_step >= num_training_steps:
+                break
+
     # Create the pipeline using using the trained modules and save it.
     accelerator.wait_for_everyone()
     if accelerator.is_main_process:
-        validate(
-            vae,
-            args,
-            accelerator,
-            global_step,
-        )
         vae = accelerator.unwrap_model(vae)
         discriminator = accelerator.unwrap_model(discriminator)
         vae.save_pretrained(args.output_dir)
         torch.save(discriminator.state_dict(), os.path.join(args.output_dir, "pytorch_model.bin"))
+
+        validate(
+            vae,
+            args,
+            accelerator,
+            weight_dtype=weight_dtype,
+            step=global_step,
+            is_final_validation=True,
+        )
 
     accelerator.end_training()
 
@@ -451,12 +558,25 @@ if __name__ == "__main__":
     # Argument parser
     parser = argparse.ArgumentParser(description="VAE Training Script")
     parser.add_argument("--dataset_path", type=str, required=True, help="Path to the image folder containing spectrogram images.")
+    parser.add_argument("--model_config", type=str, required=True, help="The config of the VAE model to train.",)
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training.")
     parser.add_argument("--num_epochs", type=int, default=50, help="Number of training epochs.")
+    parser.add_argument("--max_train_steps", type=int, default=None, help="Overrides num_epochs. Total number of training steps to perform. Usefull to test.",)
     parser.add_argument("--learning_rate", type=float, default=4.5e-6, help="Learning rate for the optimizer.")
-    parser.add_argument("--seed", type=int, default=40, help="Random seed for reproducibility.")
+    parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility.")
     parser.add_argument("--output_dir", type=str, default="my_model", help="Directory to save the trained model.")
+    parser.add_argument("--logging_dir", type=str,default="logs", help=("A path to a directory for storing logs of locally-compatible loggers. If None, defaults to project_dir."),)
     parser.add_argument("--mixed_precision", type=str, default="no", choices=["no", "fp16"], help="Mixed precision setting.")
+    parser.add_argument("--enable_xformers", action="store_true", help="Whether or not to use xformers memory efficient attention.")
+    parser.add_argument("--use_8bit_adam", action="store_true", help="Whether or not to use 8-bit Adam from bitsandbytes.")
+    parser.add_argument("--allow_tf32",action="store_true",
+        help=(
+            "Whether or not to allow TF32 on Ampere GPUs. Can be used to speed up training. For more information, see"
+            " https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices"
+        ),
+    )
+    parser.add_argument('--resolution_x', type=int, default=128, help='The width resolution for input images.')
+    parser.add_argument('--resolution_y', type=int, default=128, help='The height resolution for input images.')    
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1, help="Number of steps for gradient accumulation.")
     parser.add_argument("--disc_start", type=int, default=50001, help="Starting step for the discriminator. Usually, we want the dicriminator start after the VAE as to not overpower the VAE too early",)
     parser.add_argument("--report_to", type=str, default="tensorboard", help='Supported platforms are `"tensorboard"` (default), `"wandb"` and `"comet_ml"`. Use `"all"` to report to all integrations.')
@@ -466,7 +586,7 @@ if __name__ == "__main__":
     parser.add_argument("--disc_factor", type=float, default=1.0, help="Scaling factor for the discriminator")
     parser.add_argument("--adaptive_scale", type=float, default=1.0, help="Scaling factor for the discriminator")
     parser.add_argument("--save_model_epochs", type=int, default=10, help="Epochs interval to save the model.")
-    parser.add_argument("--validation_steps", type=int, default=10, help="Steps interval to evaluate generated images.")
+    parser.add_argument("--validation_steps", type=int, default=500, help="Steps interval to evaluate generated images.")
     parser.add_argument("--validation_image", type=str, default=None, nargs="+", help="A set of paths to the image be evaluated every `--validation_steps` and logged to `--report_to`.")
     parser.add_argument("--kl_scale", type=float, default=1e-6, help="Scaling factor for the Kullback-Leibler divergence penalty term.")
     parser.add_argument("--perceptual_scale", type=float, default=0.5, help="Scaling factor for the LPIPS metric")
@@ -482,6 +602,14 @@ if __name__ == "__main__":
                 ' "constant", "constant_with_warmup"]'
             ),
         )
-    parser.add_argument("--enable_xformers_memory_efficient_attention", action="store_true", help="Whether or not to use xformers.")
+    parser.add_argument("--lr_warmup_steps", type=int, default=500, help="Number of steps for the warmup in the lr scheduler.")
+    
     args = parser.parse_args()
+
+
+    if args.resolution_x % 8 != 0 or args.resolution_y % 8 != 0:
+        raise ValueError(
+            "`--resolution_x and --resolution_y` must be divisible by 8 for consistently sized encoded images between the VAE and the diffusion model."
+        )
+    
     main(args)
