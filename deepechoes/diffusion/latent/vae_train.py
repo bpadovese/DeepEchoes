@@ -1,34 +1,44 @@
+# Standard library imports
+import os
+import argparse
+import logging
+import contextlib
+import gc
+import math
+import random
+from pathlib import Path
+import shutil
+import glob
+
+# Third-party library imports
+import numpy as np
+import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader, ConcatDataset
-from torchvision.datasets import ImageFolder
 from torchvision import transforms
+from torchvision.datasets import ImageFolder
 import torchvision
-from diffusers import AutoencoderKL
 from PIL import Image
-from packaging import version
 from tqdm import tqdm
+from packaging import version
+import lpips
+from taming.modules.losses.vqperceptual import (
+    hinge_d_loss,
+    vanilla_d_loss,
+    weights_init,
+    NLayerDiscriminator,
+)
+
+# Hugging Face and Diffusers imports
 from accelerate import Accelerator
+from accelerate.utils import ProjectConfiguration, set_seed
+from accelerate.logging import get_logger
+from diffusers import AutoencoderKL
 import diffusers
 from diffusers.utils.import_utils import is_xformers_available
 from diffusers.utils.torch_utils import is_compiled_module
 from diffusers.optimization import get_scheduler
 from diffusers.utils import is_wandb_available
-from accelerate.utils import ProjectConfiguration, set_seed
-from accelerate.logging import get_logger
-from taming.modules.losses.vqperceptual import hinge_d_loss, vanilla_d_loss, weights_init, NLayerDiscriminator
-from pathlib import Path
-import shutil
-import contextlib
-import logging
-import gc
-import os
-import numpy as np
-import math
-import torch.nn.functional as F
-import torch
-import random
-import argparse
-import lpips
-import glob
 
 if is_wandb_available():
     import wandb
