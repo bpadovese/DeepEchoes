@@ -124,3 +124,94 @@ results/
 ├── pytorch_model.bin      # Final discriminator weights
 └── config.json            # Final VAE configuration
 ```
+
+
+# Database Creation
+
+The `create_db` script converts audio files into spectrograms and organizes them into a database suitable for training. It supports various audio formats and provides options for spectrogram generation parameters.
+
+## Usage
+
+### Example Command
+
+```bash
+python -m deepechoes.create_db 
+/path/to/audio/files \ 
+spec_config.json \
+--mode img \
+--annotations annotations_csv.csv \
+--labels SRKW=1 \
+--output output_root_dir \
+--seed 40
+```
+
+### Audio File Organization
+
+The script supports two input directory structures:
+
+#### Class-Based Structure:
+```
+audio_files/
+├── humpback/
+│   ├── recording_001.wav
+│   ├── recording_002.mp3
+├── orca/
+│   ├── pod_recording_001.wav
+│   ├── pod_recording_002.wav
+└── dolphin/
+    ├── whistles_001.wav
+    ├── clicks_001.wav
+```
+
+#### Flat Structure:
+```
+audio_files/
+├── recording_001.wav
+├── recording_002.mp3
+└── recording_003.wav
+```
+
+## Key Components
+
+1. Annotations CSV Format:
+```csv
+filename,start,end,label
+recording_001.wav,12.5,15.2,SRKW
+recording_002.wav,45.1,47.8,humpback
+```
+- Required columns: filename, start, end, label
+- Labels are mapped to integers using --labels argument
+
+2. Spectrogram Configuration (spec_config.json):
+
+```json
+{
+  "sr": 24000,
+  "window": 0.05,
+  "step": 0.0125,
+  "num_filters": 128,
+  "duration": 3,
+  "fmin": 0,
+  "fmax": 12000
+}
+```
+- sr: Target sample rate
+- duration: Clip length in seconds
+- window: Spectrogram window size (seconds)
+- step: Spectrogram hop length (seconds)
+
+## Output Modes
+
+### HDF5 Mode (--mode hdf5) ToDo
+
+### Image Mode (--mode img)
+Generates PNG spectrograms organized by class:
+```
+output_root_dir/
+├── 0/  
+│   ├── file1_0.png
+│   └── file2_0.png
+└── 1/  
+    ├── file1_1.png
+    └── file2_1.png
+```

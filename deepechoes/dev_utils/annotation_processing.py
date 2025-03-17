@@ -47,10 +47,15 @@ def standardize(annotations, sep=',', labels='auto'):
     if isinstance(annotations, str):
         df = pd.read_csv(annotations, sep=sep)
     elif isinstance(annotations, pd.DataFrame):
-        df = annotations
+        df = annotations.copy()
     else:
         raise ValueError("Annotations must be a pandas DataFrame or a file path to a CSV file.")
 
+    # Ensure the DataFrame contains 'filename' and 'label' columns
+    missing_columns = [col for col in ['filename', 'label'] if col not in df.columns]
+    if missing_columns:
+        raise AssertionError(f"Missing required column(s): {', '.join(missing_columns)}")
+    
     label_mapping = dict()
     # Handle label mapping based on the labels argument
     if labels == 'auto':
@@ -65,11 +70,6 @@ def standardize(annotations, sep=',', labels='auto'):
         df['label'] = df['label'].map(label_mapping).fillna(-1).astype(int)
     elif labels is not None:
         raise ValueError("Unsupported value for labels argument. Use 'auto', None, a list of labels, or a dict.")
-    
-    # Ensure the DataFrame contains 'filename' and 'label' columns
-    required_columns = ['filename', 'label']
-    missing_columns = [col for col in required_columns if col not in df.columns]
-    assert not missing_columns, f"Missing required column(s): {', '.join(missing_columns)}"
 
     # always sort by filename (first) and start time (second)
     by = ['filename']

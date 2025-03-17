@@ -52,7 +52,6 @@ def create_db(data_dir, audio_representation, mode='hdf5', annotations=None, ann
     if annotations is not None: # If an annotation table is provided
         annots = pd.read_csv(annotations)
         annots = standardize(annots, labels=labels) # Standardize annotations by mapping labels to integers
-        
         # Get the list of labels after processing
         labels = annots.label.unique().tolist()
    
@@ -298,7 +297,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('data_dir', type=str, help='Path to the directory containing the audio files')
     parser.add_argument('audio_representation', type=str, help='Path to the audio representation config file')
-    parser.add_argument('--mode', default='hdf5', type=str, help='hdf5 or img')
+    parser.add_argument('--mode', default='img', type=str, help='hdf5 or img')
     parser.add_argument('--annotations', default=None, type=str, help='Path to the annotations .csv')
     parser.add_argument('--annotation_step', default=0, type=float, help='Produce multiple time shifted representations views for each annotated  section by shifting the annotation  \
                 window in steps of length step (in seconds) both forward and backward in time. The default value is 0.')
