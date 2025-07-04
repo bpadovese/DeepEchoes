@@ -19,13 +19,6 @@ import torch.nn.functional as F
 import torch
 import random
 
-def make_grid(images, rows, cols):
-    w, h = images[0].size
-    grid = Image.new("RGB", size=(cols * w, rows * h))
-    for i, image in enumerate(images):
-        grid.paste(image, box=(i % cols * w, i // cols * h))
-    return grid
-
 def make_grid_spec(images, cols):
     num_images = images.shape[0]
     rows = math.ceil(num_images / cols)  # Calculate the number of rows
@@ -62,21 +55,10 @@ def evaluate(config, epoch, pipeline, generator):
             num_inference_steps=pipeline.scheduler.config.num_train_timesteps,
             return_dict=False,
         )[0]
-        
-        # denormalize the images and save to tensorboard
-        # images = np.array(
-        #     [
-        #         np.frombuffer(image.tobytes(), dtype="uint8").reshape(
-        #             (len(image.getbands()), image.height, image.width)
-        #         )
-        #         for image in images
-        #     ]
-        # )
+
         for idx, image in enumerate(images):  # `images` is a list of PIL.Image objects
             image.save(os.path.join(test_dir, f"image_epoch{epoch}_sample{idx}.png"))
 
-        # image_grid = make_grid(images, rows=4, cols=4)
-        # image_grid.save(f"{test_dir}/{epoch:04d}.png")
     else:
         images = pipeline(
             batch_size=config['eval_batch_size'],
@@ -117,6 +99,52 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
 
         for step, batch in enumerate(train_dataloader):
             clean_images = batch[0]
+
+            # if global_step == 0 and accelerator.is_main_process:
+            #     with torch.no_grad():
+            #         # Take the first few samples for visualization
+            #         clean_sample = clean_images[:4]  # shape: (B, C, H, W)
+
+            #         # Choose specific timesteps
+            #         total_steps = noise_scheduler.config['num_train_timesteps']
+            #         vis_steps = [0, 20, 50, 500]
+
+            #         # vis_steps = [0, total_steps // 3, 2 * total_steps // 3, total_steps - 1]
+
+            #         all_noisy_versions = []
+
+            #         for t in vis_steps:
+            #             t_tensor = torch.full((clean_sample.size(0),), t, device=clean_sample.device, dtype=torch.long)
+            #             noise = torch.randn_like(clean_sample)
+            #             noisy = noise_scheduler.add_noise(clean_sample, noise, t_tensor)
+            #             all_noisy_versions.append(noisy.cpu())
+                        
+            #             # Make sure the output directory exists
+            #             os.makedirs(config['output_dir'], exist_ok=True)
+
+            #             # Save each sample (shape: [C, H, W]) from each timestep
+            #             for step_idx, noisy_batch in enumerate(all_noisy_versions):
+            #                 for sample_idx in range(noisy_batch.size(0)):
+            #                     image_tensor = noisy_batch[sample_idx]  # shape: (C, H, W)
+            #                     image_np = image_tensor.permute(1, 2, 0).numpy()  # (H, W, C)
+
+            #                     # Normalize to [0, 1] for visualization
+            #                     image_np = (image_np - image_np.min()) / (image_np.max() - image_np.min())
+
+            #                     # Optional: force grayscale if single-channel
+            #                     if image_np.shape[2] == 1:
+            #                         image_np = image_np.squeeze(-1)
+            #                         cmap = 'gray'
+            #                     else:
+            #                         cmap = None
+
+            #                     # Save image
+            #                     save_path = os.path.join(
+            #                         config['output_dir'],
+            #                         f"epoch{epoch}_sample{sample_idx}_step{step_idx}.png"
+            #                     )
+            #                     plt.imsave(save_path, image_np, cmap=cmap)  
+                    
             # Sample noise to add to the images
             noise = torch.randn(clean_images.shape, device=clean_images.device)
             bs = clean_images.shape[0]
@@ -204,6 +232,41 @@ def select_transform(norm_type, image_size):
             ])
         case _:
             raise ValueError("Invalid norm_type value. It should be between 0 and 1.")
+
+def load_image_dataset(path, transform=None):
+    """
+    Automatically load an ImageFolder dataset.
+    
+    - If the path contains subfolders → load all classes.
+    - If the path is a leaf folder with images → treat it as one class.
+
+    Returns:
+        dataset (ImageFolder or Subset)
+    """
+    # Check if there are any subdirectories (class folders)
+    subdirs = [d for d in os.listdir(path) if os.path.isdir(os.path.join(path, d))]
+    
+    if subdirs:
+        # Has subdirectories — treat as full ImageFolder
+        dataset = ImageFolder(root=path, transform=transform, loader=lambda path: Image.open(path))
+    else:
+        # Leaf folder with images — treat as single class
+        parent_path = os.path.dirname(os.path.normpath(path))
+        class_name = os.path.basename(os.path.normpath(path))
+
+        # Load from parent but filter only target class
+        full_dataset = ImageFolder(root=parent_path, transform=transform, loader=lambda path: Image.open(path))
+        
+        # Get the index of the class name
+        class_to_idx = full_dataset.class_to_idx
+        if class_name not in class_to_idx:
+            raise ValueError(f"Class folder '{class_name}' not found in {parent_path}.")
+        
+        label = class_to_idx[class_name]
+        indices = [i for i, (_, l) in enumerate(full_dataset.samples) if l == label]
+        dataset = Subset(full_dataset, indices)
+    
+    return dataset
         
 def main(dataset, pretrained_model=None, mode='img', train_table="/train", image_size=128, train_batch_size=8, eval_batch_size=8, 
          num_epochs=50, num_timesteps=1000, gradient_accumulation_steps=1, learning_rate=1e-4, 
@@ -216,33 +279,9 @@ def main(dataset, pretrained_model=None, mode='img', train_table="/train", image
         np.random.seed(seed)
         random.seed(seed)
 
-    if mode == "img":
-        train_transform = select_transform(norm_type, image_size)
-        # Load images from the folder
-        train_dataset = ImageFolder(root=dataset, transform=train_transform, loader=lambda path: Image.open(path))
-        # Filter indices to include only samples with label 1
-        indices = [i for i, (_, label) in enumerate(train_dataset.samples) if label == 1]
-
-        # Create a subset of the dataset with only class "1"
-        train_dataset = Subset(train_dataset, indices)
-
-    else:
-        # Select transforms for the training dataset
-        train_transform = select_transform(norm_type, image_size)
-
-        train_datasets = []
-        # Handle train_table argument (single path or list of paths)
-        if isinstance(train_table, str):
-            train_table = [train_table]  # Convert to list if it's a single path
-        for path in train_table:
-            leaf_paths = get_leaf_paths(dataset, path)
-            for leaf_path in leaf_paths:
-                train_ds = HDF5Dataset(dataset, leaf_path, transform=None) 
-                train_ds.set_transform(train_transform)
-                train_datasets.append(train_ds)
-
-        # Concating all train datasets together.
-        train_dataset = ConcatDataset(train_datasets) if len(train_datasets) > 1 else train_datasets[0]
+    train_transform = select_transform(norm_type, image_size)
+    # Load images from the folder
+    train_dataset = load_image_dataset(dataset, transform=train_transform)
 
     # Sanity check: print the total number of samples in all datasets combined
     total_samples = len(train_dataset)

@@ -14,26 +14,6 @@ from deepechoes.dev_utils.validate_generation import filter_spectrograms, load_s
 from sklearn.decomposition import PCA
 
 
-    
-def save_specs_individually(images, output_path, prefix="spec"):
-    """
-    Save spectrograms as individual images.
-
-    Parameters:
-    - images: numpy array of spectrograms
-    - output_path: Path object or string, directory to save the spectrograms
-    - prefix: Optional prefix for filenames
-    """
-    output_path = Path(output_path)
-    output_path.mkdir(parents=True, exist_ok=True)
-
-    for i, image in enumerate(images):
-        fig, ax = plt.subplots(figsize=(5, 5))
-        ax.imshow(image[:, :, 0], aspect='auto', origin='lower', cmap='viridis')
-        ax.axis('off')  # Turn off the axis
-        fig.savefig(output_path / f"{prefix}_{i}.png", bbox_inches='tight')
-        plt.close(fig)  # Close the figure to save memory
-
 
 def make_grid_spec(images, cols):
     print(images.shape)
@@ -57,6 +37,47 @@ def make_grid_spec(images, cols):
 
     plt.tight_layout()
     return fig
+
+def save_reverse_diffusion_steps(pipeline, output_dir, num_inference_steps=10, seed=None):
+    output_dir = Path(output_dir)
+    output_dir.mkdir(exist_ok=True, parents=True)
+
+    device = pipeline.device  # usually 'cuda'
+    if seed is not None:
+        generator = torch.Generator(device=device).manual_seed(seed)
+    else:
+        generator = torch.Generator(device=device)
+
+    # 1. Start from noise
+    batch_size = 1
+    shape = pipeline.unet.config.sample_size
+    latents = torch.randn(
+        (batch_size, pipeline.unet.config.in_channels, shape, shape),
+        generator=generator,
+        device=device,
+    )
+
+    scheduler = pipeline.scheduler
+    scheduler.set_timesteps(num_inference_steps)
+
+    for i, t in enumerate(scheduler.timesteps):
+        with torch.no_grad():
+            noise_pred = pipeline.unet(latents, t)["sample"]
+            latents = scheduler.step(noise_pred, t, latents)["prev_sample"]
+
+        # Convert to numpy and reshape
+        image = latents.detach().cpu().squeeze().numpy()
+
+        image.save(output_dir / f"step_{i:03d}.png")
+
+        # # Save as a spectrogram-like image
+        # fig, ax = plt.subplots(figsize=(3, 3))
+        # ax.imshow(image, aspect='auto', origin='lower', cmap='viridis')
+        # ax.axis('off')
+        # fig.savefig(output_dir / f"step_{i:03d}.png", bbox_inches='tight')
+        # plt.close(fig)
+
+    print(f"Saved {num_inference_steps} denoising steps to {output_dir}")
 
 def to_img(pipeline, num_samples, output_path='./dataset', batch_size=8, num_inference_steps=1000, display=None, real_spectrograms=None):    
     num_valid_samples = 0
@@ -91,7 +112,7 @@ def to_img(pipeline, num_samples, output_path='./dataset', batch_size=8, num_inf
                 # Save the figure
                 spec_grid.savefig(output_path / f'{str(batch_num)}.png', bbox_inches='tight')
             else:
-                 # Save filtered images
+                # Save images
                 for i, image in enumerate(images):
                     if num_valid_samples >= num_samples:
                         break
@@ -99,31 +120,8 @@ def to_img(pipeline, num_samples, output_path='./dataset', batch_size=8, num_inf
                     num_valid_samples += 1
                     pbar.update(1)
                 
-                # save_specs_individually(images, output_path=output_path, prefix=f'batch_{batch_num}')
 
-def to_hdf5(pipeline, num_samples, output_path='diffusion.h5', table_name='/train', label=1, batch_size=8, num_inference_steps=1000):
-    
-    print('\nCreating db...')
-    with tb.open_file(output_path, mode='a') as h5file:
-        table = create_or_get_table(h5file, table_name, 'data', create_table_description((128,128)))
-        num_batches = (num_samples + batch_size - 1) // batch_size  # Calculate how many batches are needed
-        print(f'\nGenerating {num_samples} samples with label {label} to table {table_name}...')
-        for batch_num in tqdm(range(num_batches)):
-            batch_size_adjusted = min(batch_size, num_samples - batch_num * batch_size) # calculate the batch size for the current batch (will be different for the last batch)
-            # Generate the images
-            images = pipeline(batch_size=batch_size_adjusted, output_type="nd.array", num_inference_steps=num_inference_steps).images
-
-            for i, representation_data in enumerate(images):
-                idx = batch_num * batch_size + i
-                filename = f"diffusion_{idx}"
-
-                # Squeeze the last dimension if it's 1
-                if representation_data.shape[-1] == 1:
-                    representation_data = representation_data.squeeze(-1)
-                
-                insert_spectrogram_data(table, filename, 0, label, representation_data)
-
-def diffusion_inference(model_path, mode, num_samples, output_path='diffusion.h5', table_name='/train', label=1, batch_size=8, num_inference_steps=1000, validation=None, seed=None):
+def diffusion_inference(model_path, num_samples, output_path=None, label=1, batch_size=8, num_inference_steps=1000, validation=None, seed=None):
     
     if seed:
         # Set seeds for reproducibility
@@ -149,6 +147,8 @@ def diffusion_inference(model_path, mode, num_samples, output_path='diffusion.h5
     # Replace the scheduler with DDIMScheduler
     pipeline.scheduler = DDIMScheduler.from_config(pipeline.scheduler.config)
 
+    # save_reverse_diffusion_steps(pipeline, output_dir=output_path, num_inference_steps=num_inference_steps, seed=seed)
+    # exit()
     print(pipeline.scheduler)
     pipeline.set_progress_bar_config(disable=True, leave=True, desc="Pipeline Progress") # for some reason, leave True not working
     
@@ -162,17 +162,14 @@ def diffusion_inference(model_path, mode, num_samples, output_path='diffusion.h5
             load_spectrogram(f, image_shape=(128,128)).flatten() for f in real_spectrogram_files
         ])
 
-    if mode == 'hdf5':
-        to_hdf5(pipeline, num_samples, output_path, table_name, label, batch_size, num_inference_steps)
-    else:
-        to_img(
-            pipeline, 
-            num_samples, 
-            output_path=output_path, 
-            batch_size=batch_size, 
-            real_spectrograms=real_spectrograms,
-            num_inference_steps=num_inference_steps
-            )
+    to_img(
+        pipeline, 
+        num_samples, 
+        output_path=output_path, 
+        batch_size=batch_size, 
+        real_spectrograms=real_spectrograms,
+        num_inference_steps=num_inference_steps
+        )
 
 def main():
     import argparse
@@ -181,10 +178,8 @@ def main():
     parser = argparse.ArgumentParser()
     
     parser.add_argument('model_path', type=str, help='Path to where the generator is saved')
-    parser.add_argument('--mode', type=str, choices=['hdf5', 'img'], default='img', help="Specify dataset mode: 'img' to generate images, 'hdf5' for tos tore in HDF5 datasets.")
     parser.add_argument('--num_samples', default=10, type=int, help="How many samples to generate.")
     parser.add_argument('--output_path', default=None, type=str, help='Output Path')
-    parser.add_argument('--table_name', default='/train', type=str, help="Table name within the database where the data will be stored. Must start with a foward slash. For instance '/train'")
     parser.add_argument('--label', default=1, type=int, help='Label to assign the generated images.')
     parser.add_argument('--batch_size', default=8, type=int, help='Number of samples to generate per batch.')
     parser.add_argument('--num_inference_steps', default=1000, type=int, help="Number of denoising steps during the reverse-diffusion step.")
@@ -203,10 +198,8 @@ def main():
 
     diffusion_inference(
         args.model_path, 
-        args.mode, 
         args.num_samples, 
         output_path=args.output_path, 
-        table_name=args.table_name, 
         label=args.label, 
         batch_size=args.batch_size, 
         num_inference_steps=args.num_inference_steps,
